@@ -215,7 +215,9 @@ def log_validation(
             image_tensor = image_tensor * 255.0
             r, g, b = image_tensor[:, 0, :, :], image_tensor[:, 1, :, :], image_tensor[:, 2, :, :]
             cive = 0.441 * r - 0.811 * g + 0.385 * b + 18.78745
-            binary_images = (cive > 0).float()
+            cane_night = 0.0884 * r - 0.0785  * g + 0.0025 * b -4.8992
+            cane_day = 0.0665 * r - 0.1328 * g + 0.0398 * b + 0.0005
+            binary_images = ((cane_day > 0) | (cane_night > 0)).float()
 
             # ground truth mask
             mask_tensor = transforms.ToTensor()(validation_label.convert("L")).to(accelerator.device)
