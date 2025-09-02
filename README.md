@@ -6,3 +6,8 @@
 - cd git-repository
 - nbstripout --install
 Gitのpre-commitフックを設定し，コミット前に処理を行う
+
+### tensorboardで学習結果の確認
+```
+$ tensorboard --logdir ./logs
+```
