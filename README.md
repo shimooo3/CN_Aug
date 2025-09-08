@@ -11,3 +11,7 @@ Gitのpre-commitフックを設定し，コミット前に処理を行う
 ```
 $ tensorboard --logdir ./logs
 ```
+
+### 二値分類の損失関数
+import torch as nn  
+nn.BCEWithLogits Lossの出力は生の値(logits)であるため，場合によってはシグモイド関数を通す必要がある．
