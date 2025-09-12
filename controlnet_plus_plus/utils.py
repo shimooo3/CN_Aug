@@ -364,11 +364,12 @@ class GreenRatioModel(nn.Module):
         r, g, b = image[:, 0, :, :], image[:, 1, :, :], image[:, 2, :, :]
         cive = 0.441 * r - 0.811 * g + 0.385 * b + 18.78745
         cane_night = 0.0884 * r - 0.0785  * g + 0.0025 * b -4.8992
-        cane_day = 0.0665 * r - 0.1328 * g + 0.0398 * b + 0.0005
+        cane_day = 0.0237 * r - 0.0408 * g + 0.0050 * b + 0.2563
+        rgb_BCEWithLogits = 0.201833*r + -0.208213*g + -0.098413*b + -0.419534
         
         
         # 二値化
-        binary_image = ((cane_day > 0) | (cane_night > 0)).float()
+        binary_image = ((cane_day > 0) | (cane_night > 0) | (rgb_BCEWithLogits > 0)).float()
 
         # 正解マスク領域でフィルタリング
         binary_image = binary_image * mask.squeeze(1)
