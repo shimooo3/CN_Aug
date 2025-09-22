@@ -741,19 +741,38 @@ def parse_args(input_args=None):
             "(20231111-added)"
         ),
     )
-    parser.add_argument(
-        "--db_metrics",
-        type=str,
-        default=[],
-        nargs="+",
-        help=(
-            f"{util.evaluate_DatasetDataset_utils.DatasetSimilarityCalculator.SUPPORTED_METRICS}"
-            "(20231113-added)"
-        ),
-    )
-
-    if input_args is not None:
-        args = parser.parse_args(input_args)
+            parser.add_argument(
+                "--db_metrics",
+                type=str,
+                default=[],
+                nargs="+",
+                help=(
+                    f"{util.evaluate_DatasetDataset_utils.DatasetSimilarityCalculator.SUPPORTED_METRICS}"
+                    "(20231113-added)"
+                ),
+            )
+    
+            # Arguments for timestep-based conditioning weighting
+            parser.add_argument(
+                "--conditioning_weighting_start",
+                type=float,
+                default=1.0,
+                help="The weight for conditioning at timestep 0. Defaults to 1.0.",
+            )
+            parser.add_argument(
+                "--conditioning_weighting_end",
+                type=float,
+                default=0.0,
+                help="The weight for conditioning at the final timestep. Defaults to 0.0.",
+            )
+            parser.add_argument(
+                "--conditioning_weighting_power",
+                type=float,
+                default=1.0,
+                help="The power for the interpolation curve of the conditioning weight. Defaults to 1.0 (linear).",
+            )
+    
+            if input_args is not None:        args = parser.parse_args(input_args)
     else:
         args = parser.parse_args()
 
@@ -1279,11 +1298,13 @@ def main(args):
                     return_dict=False,
                 )
 
-                # Timestep-based weighting for conditioning
-                # The weight is close to 1 for small timesteps (low noise) and close to 0 for large timesteps (high noise).
-                # This strengthens conditioning when the image is less noisy and weakens it when it's very noisy.
-                timestep_weights = 1.0 - (timesteps.float() / (noise_scheduler.config.num_train_timesteps - 1))
+                # Timestep-based weighting for conditioning, controlled by command-line arguments.
+                interpolation_factor = timesteps.float() / (noise_scheduler.config.num_train_timesteps - 1)
+                interpolation_factor = torch.pow(interpolation_factor, args.conditioning_weighting_power)
                 
+                timestep_weights = args.conditioning_weighting_start + \
+                                   interpolation_factor * (args.conditioning_weighting_end - args.conditioning_weighting_start)
+
                 # Reshape weights for broadcasting. The residuals have a shape of (batch, channel, height, width).
                 # The weights tensor is reshaped from (batch,) to (batch, 1, 1, 1).
                 reshaped_weights = timestep_weights.view(-1, 1, 1, 1)
