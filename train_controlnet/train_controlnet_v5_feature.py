@@ -741,38 +741,38 @@ def parse_args(input_args=None):
             "(20231111-added)"
         ),
     )
-            parser.add_argument(
-                "--db_metrics",
-                type=str,
-                default=[],
-                nargs="+",
-                help=(
-                    f"{util.evaluate_DatasetDataset_utils.DatasetSimilarityCalculator.SUPPORTED_METRICS}"
-                    "(20231113-added)"
-                ),
-            )
+    parser.add_argument(
+        "--db_metrics",
+        type=str,
+        default=[],
+        nargs="+",
+        help=(
+            f"{util.evaluate_DatasetDataset_utils.DatasetSimilarityCalculator.SUPPORTED_METRICS}"
+            "(20231113-added)"
+        ),
+    )
     
             # Arguments for timestep-based conditioning weighting
-            parser.add_argument(
-                "--conditioning_weighting_start",
-                type=float,
-                default=1.0,
-                help="The weight for conditioning at timestep 0. Defaults to 1.0.",
-            )
-            parser.add_argument(
-                "--conditioning_weighting_end",
-                type=float,
-                default=0.0,
-                help="The weight for conditioning at the final timestep. Defaults to 0.0.",
-            )
-            parser.add_argument(
-                "--conditioning_weighting_power",
-                type=float,
-                default=1.0,
-                help="The power for the interpolation curve of the conditioning weight. Defaults to 1.0 (linear).",
-            )
+    parser.add_argument(
+        "--conditioning_weighting_start",
+        type=float,
+        default=1.0,
+        help="The weight for conditioning at timestep 0. Defaults to 1.0.",
+    )
+    parser.add_argument(
+        "--conditioning_weighting_end",
+        type=float,
+        default=0.0,
+        help="The weight for conditioning at the final timestep. Defaults to 0.0.",
+    )
+    parser.add_argument(
+        "--conditioning_weighting_power",
+        type=float,
+        default=1.0,
+        help="The power for the interpolation curve of the conditioning weight. Defaults to 1.0 (linear).",
+    )
     
-            if input_args is not None:        args = parser.parse_args(input_args)
+    if input_args is not None:        args = parser.parse_args(input_args)
     else:
         args = parser.parse_args()
 
