@@ -1300,6 +1300,7 @@ def main(args):
 
                 # Timestep-based weighting for conditioning, controlled by command-line arguments.
                 interpolation_factor = timesteps.float() / (noise_scheduler.config.num_train_timesteps - 1)
+                interpolation_factor = 1 - interpolation_factor
                 interpolation_factor = torch.pow(interpolation_factor, args.conditioning_weighting_power)
                 
                 timestep_weights = args.conditioning_weighting_start + \
