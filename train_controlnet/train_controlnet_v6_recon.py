@@ -475,7 +475,7 @@ def parse_args(input_args=None):
         type=str,
         default=None,
         help=(
-            "Whether training should be resumed from a previous checkpoint. Use a path saved by"" `--checkpointing_steps`, or `"latest"` to automatically select the last available checkpoint."
+            "Whether training should be resumed from a previous checkpoint. Use a path saved by"' `--checkpointing_steps`, or `"latest"` to automatically select the last available checkpoint.'
         ),
     )
     parser.add_argument(
@@ -564,7 +564,7 @@ def parse_args(input_args=None):
         type=str,
         default="tensorboard",
         help=(
-            'The integration to report the results and logs to. Supported platforms are `"tensorboard"`'" (default), `"wandb"` and `"comet_ml"`. Use `"all"` to report to all integrations.'
+            'The integration to report the results and logs to. Supported platforms are `"tensorboard"`'' (default), `"wandb"` and `"comet_ml"`. Use `"all"` to report to all integrations.'
         ),
     )
     parser.add_argument(
@@ -1149,7 +1149,7 @@ def main(args):
         )
 
     # Use 8-bit Adam for lower memory usage or to fine-tune the model in 16GB GPUs
-    if args.use_8bit_adam):
+    if (args.use_8bit_adam):
         try:
             import bitsandbytes as bnb
         except ImportError:
@@ -1449,7 +1449,7 @@ def main(args):
                             val_res = checkpoint_save_list[label_key]["values_q"].enqueue(metric_mean)
 
                             if cp_res is not None:
-                                shutil.rmtree(str(cp_res)))
+                                shutil.rmtree(str(cp_res))
             logs = {"global_step":global_step, "loss": loss.detach().item(), "noise_loss": noise_loss.detach().item(), "recon_loss": reconstruction_loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
             progress_bar.set_postfix(**logs)
 
