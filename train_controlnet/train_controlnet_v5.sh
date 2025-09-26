@@ -1,5 +1,4 @@
-# nohup bash 02_controlnet_train_keypoint_v3.sh > nohup_trak_controlnet.out &
-#     --unet_model_name_or_path="../../spring/diffusers/examples/text_to_image/grape_SD/checkpoint-14000/" \
+# nohup bash 02_controlnet_train_keypoint_v5.sh > nohup_trak_controlnet.out &
 source ~/anaconda3/etc/profile.d/conda.sh
 conda activate ymc
 
@@ -8,11 +7,11 @@ train_data_dir="../__dataset__/04-1_controlnet_keypoint/train/train/"
 train_data_num=$(wc -l < "${train_data_dir}/prompt.json")
 
 today=`date "+%Y%m%d-%H%M"`
-output_dir_name="../__output__/02-1_controlnet_keypoint/${today}_${learning_rate}_NoCanny"
+output_dir_name="../model/controlnet"
 
 validation_checkpoints_steps=50
 
-accelerate launch "../train_controlnet_v3_keypoint.py" \
+accelerate launch "../train_controlnet_v5_feature.py" \
     --pretrained_model_name_or_path="stabilityai/stable-diffusion-2-1-base" \
     --output_dir=$output_dir_name \
     \
