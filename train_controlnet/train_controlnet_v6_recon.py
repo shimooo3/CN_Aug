@@ -26,7 +26,6 @@ import shutil
 from pathlib import Path
 from PIL import Image
 import random
-import itertools
 
 import accelerate
 import numpy as np
@@ -79,21 +78,33 @@ class ConditionAutoencoder(nn.Module):
     def __init__(self, unet: UNet2DConditionModel):
         super().__init__()
         # U-Netのエンコーダ部分をコピー
-        self.conv_in = nn.Conv2d(unet.conv_in.in_channels, unet.conv_in.out_channels, kernel_size=unet.conv_in.kernel_size, stride=unet.conv_in.stride, padding=unet.conv_in.padding)
+        self.conv_in = nn.Conv2d(
+            unet.conv_in.in_channels,
+            unet.conv_in.out_channels,
+            kernel_size=unet.conv_in.kernel_size,
+            stride=unet.conv_in.stride,
+            padding=unet.conv_in.padding,
+        )
         self.down_blocks = nn.ModuleList(unet.down_blocks)
-        
+
         # U-Netのデコーダ部分をコピー
         self.up_blocks = nn.ModuleList(unet.up_blocks)
-        self.conv_out = nn.Conv2d(unet.conv_out.in_channels, unet.conv_out.out_channels, kernel_size=unet.conv_out.kernel_size, stride=unet.conv_out.stride, padding=unet.conv_out.padding)
-
+        self.conv_out = nn.Conv2d(
+            unet.conv_out.in_channels,
+            unet.conv_out.out_channels,
+            kernel_size=unet.conv_out.kernel_size,
+            stride=unet.conv_out.stride,
+            padding=unet.conv_out.padding,
+        )
+        
         # 重みをゼロから初期化
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
         if isinstance(m, (nn.Conv2d, nn.Linear)):
-            torch.nn.init.normal_(m.weight, mean=0.0, std=0.02)
+            nn.init.normal_(m.weight, mean=0.0, std=0.02)
             if m.bias is not None:
-                torch.nn.init.zeros_(m.bias)
+                nn.init.zeros_(m.bias)
 
     def forward(self, condition_image):
         # Encoder
@@ -101,6 +112,7 @@ class ConditionAutoencoder(nn.Module):
         down_block_res_samples = (x,)
         for downsample_block in self.down_blocks:
             if hasattr(downsample_block, "has_cross_attention") and downsample_block.has_cross_attention:
+                # Cross-attentionは使用しないので、ダミーのencoder_hidden_statesを渡す
                 x, res_samples = downsample_block(
                     hidden_states=x,
                     encoder_hidden_states=None,
@@ -121,7 +133,9 @@ class ConditionAutoencoder(nn.Module):
                     encoder_hidden_states=None,
                 )
             else:
-                x = upsample_block(hidden_states=x, res_hidden_states_tuple=res_samples, temb=None)
+                x = upsample_block(
+                    hidden_states=x, temb=None, res_hidden_states_tuple=res_samples
+                )
         
         reconstructed_image = self.conv_out(x)
         return reconstructed_image
@@ -138,7 +152,7 @@ def image_grid(imgs, rows, cols):
     return grid
 
 
-def log_validation(vae, text_encoder, tokenizer, controlnet, args, accelerator, weight_dtype, step):
+def log_validation(vae, text_encoder, tokenizer, unet, controlnet, args, accelerator, weight_dtype, step):
     logger.info("Running validation... ")
 
     controlnet = accelerator.unwrap_model(controlnet)
@@ -352,7 +366,7 @@ def save_model_card(repo_id: str, image_logs=None, base_model=str, repo_folder=N
 
     yaml = f"""
 ---
-license: creativeml-openrail-m
+license: creativeml-open-rail-m
 base_model: {base_model}
 tags:
 - stable-diffusion
@@ -362,12 +376,13 @@ tags:
 - controlnet
 inference: true
 ---
-    "
-    model_card = f"# controlnet-{repo_id}
+    """
+    model_card = f"""
+# controlnet-{repo_id}
 
 These are controlnet weights trained on {base_model} with new type of conditioning.
 {img_str}
-"
+"""
     with open(os.path.join(repo_folder, "README.md"), "w") as f:
         f.write(yaml + model_card)
 
@@ -386,7 +401,7 @@ def parse_args(input_args=None):
         type=str,
         default=None,
         help="Path to pretrained controlnet model or model identifier from huggingface.co/models."
-        " If not specified controlnet weights are initialized from unet",
+        " If not specified controlnet weights are initialized from unet.",
     )
     parser.add_argument(
         "--revision",
@@ -442,8 +457,7 @@ def parse_args(input_args=None):
         default=500,
         help=(
             "Save a checkpoint of the training state every X updates. Checkpoints can be used for resuming training via `--resume_from_checkpoint`. "
-            "In the case that the checkpoint is better than the final trained model, the checkpoint can also be used for inference."""
-            "See https://huggingface.co/docs/diffusers/main/en/training/dreambooth#performing-inference-using-a-saved-checkpoint for step by step"
+            "In the case that the checkpoint is better than the final trained model, the checkpoint can also be used for inference.""See https://huggingface.co/docs/diffusers/main/en/training/dreambooth#performing-inference-using-a-saved-checkpoint for step by step"
             "instructions."
         ),
     )
@@ -452,8 +466,7 @@ def parse_args(input_args=None):
         type=int,
         default=None,
         help=(
-            "Max number of checkpoints to store. Passed as `total_limit` to the `Accelerator` `ProjectConfiguration`."""
-            " See Accelerator::save_state https://huggingface.co/docs/accelerate/package_reference/accelerator#accelerate.Accelerator.save_state"
+            "Max number of checkpoints to store. Passed as `total_limit` to the `Accelerator` `ProjectConfiguration`.""See Accelerator::save_state https://huggingface.co/docs/accelerate/package_reference/accelerator#accelerate.Accelerator.save_state"
             " for more details"
         ),
     )
@@ -462,8 +475,7 @@ def parse_args(input_args=None):
         type=str,
         default=None,
         help=(
-            "Whether training should be resumed from a previous checkpoint. Use a path saved by"""
-            ' `--checkpointing_steps`, or `"latest"` to automatically select the last available checkpoint.'
+            "Whether training should be resumed from a previous checkpoint. Use a path saved by"" `--checkpointing_steps`, or `"latest"` to automatically select the last available checkpoint."
         ),
     )
     parser.add_argument(
@@ -537,16 +549,14 @@ def parse_args(input_args=None):
         type=str,
         default="logs",
         help=(
-            "[TensorBoard](https://www.tensorflow.org/tensorboard) log directory. Will default to"
-            " *output_dir/runs/**CURRENT_DATETIME_HOSTNAME***."
+            "[TensorBoard](https://www.tensorflow.org/tensorboard) log directory. Will default to"" *output_dir/runs/**CURRENT_DATETIME_HOSTNAME***."
         ),
     )
     parser.add_argument(
         "--allow_tf32",
         action="store_true",
         help=(
-            "Whether or not to allow TF32 on Ampere GPUs. Can be used to speed up training. For more information, see"
-            " https://pytorch.org/docs/stable/notes/cuda.html#tensorfloat-32-tf32-on-ampere-devices"
+            "Whether or not to allow TF32 on Ampere GPUs. Can be used to speed up training. For more information, see"" https://pytorch.org/docs/stable/notes/cuda.html#tensorfloat-32-tf32-on-ampere-devices"
         ),
     )
     parser.add_argument(
@@ -554,8 +564,7 @@ def parse_args(input_args=None):
         type=str,
         default="tensorboard",
         help=(
-            'The integration to report the results and logs to. Supported platforms are `"tensorboard"`' 
-            ' (default), `"wandb"` and `"comet_ml"`. Use `"all"` to report to all integrations.'
+            'The integration to report the results and logs to. Supported platforms are `"tensorboard"`'" (default), `"wandb"` and `"comet_ml"`. Use `"all"` to report to all integrations.'
         ),
     )
     parser.add_argument(
@@ -564,9 +573,7 @@ def parse_args(input_args=None):
         default=None,
         choices=["no", "fp16", "bf16"],
         help=(
-            "Whether to use mixed precision. Choose between fp16 and bf16 (bfloat16). Bf16 requires PyTorch >="
-            " 1.10.and an Nvidia Ampere GPU.  Default to the value of accelerate config of the current system or the"
-            " flag passed with the `accelerate.launch` command. Use this argument to override the accelerate config."
+            "Whether to use mixed precision. Choose between fp16 and bf16 (bfloat16). Bf16 requires PyTorch >="" 1.10.and an Nvidia Ampere GPU.  Default to the value of accelerate config of the current system or the"" flag passed with the `accelerate.launch` command. Use this argument to override the accelerate config."
         ),
     )
     parser.add_argument(
@@ -576,8 +583,7 @@ def parse_args(input_args=None):
         "--set_grads_to_none",
         action="store_true",
         help=(
-            "Save more memory by using setting grads to None instead of zero. Be aware, that this changes certain"
-            " behaviors, so disable this argument if it causes any problems. More info:"
+            "Save more memory by using setting grads to None instead of zero. Be aware, that this changes certain"" behaviors, so disable this argument if it causes any problems. More info:"
             " https://pytorch.org/docs/stable/generated/torch.optim.Optimizer.zero_grad.html"
         ),
     )
@@ -586,9 +592,7 @@ def parse_args(input_args=None):
         type=str,
         default=None,
         help=(
-            "The name of the Dataset (from the HuggingFace hub) to train on (could be your own, possibly private,"""
-            " dataset). It can also be a path pointing to a local copy of a dataset in your filesystem,"""
-            " or to a folder containing files that 🤗 Datasets can understand."
+            "The name of the Dataset (from the HuggingFace hub) to train on (could be your own, possibly private,"" dataset). It can also be a path pointing to a local copy of a dataset in your filesystem,"" or to a folder containing files that 🤗 Datasets can understand."
         ),
     )
     parser.add_argument(
@@ -602,9 +606,7 @@ def parse_args(input_args=None):
         type=str,
         default=None,
         help=(
-            "A folder containing the training data. Folder contents must follow the structure described in"
-            " https://huggingface.co/docs/datasets/image_dataset#imagefolder. In particular, a `metadata.jsonl` file"""
-            " must exist to provide the captions for the images. Ignored if `dataset_name` is specified."
+            "A folder containing the training data. Folder contents must follow the structure described in"" https://huggingface.co/docs/datasets/image_dataset#imagefolder. In particular, a `metadata.jsonl` file"" must exist to provide the captions for the images. Ignored if `dataset_name` is specified."
         ),
     )
     parser.add_argument(
@@ -659,7 +661,7 @@ def parse_args(input_args=None):
         "--num_validation_images",
         type=int,
         default=4,
-        help="Number of images to be generated for each `--validation_image`, `--validation_prompt` pair"
+        help="Number of images to be generated for each `--validation_image`, `--validation_prompt` pair",
     )
     parser.add_argument(
         "--num_validation_gen_images",
@@ -675,9 +677,7 @@ def parse_args(input_args=None):
         type=int,
         default=100,
         help=(
-            "Run validation every X steps. Validation consists of running the prompt"
-            " `args.validation_prompt` multiple times: `args.num_validation_images`"""
-            " and logging the images."
+            "Run validation every X steps. Validation consists of running the prompt"" `args.validation_prompt` multiple times: `args.num_validation_images`"" and logging the images."
         ),
     )
     parser.add_argument(
@@ -685,8 +685,7 @@ def parse_args(input_args=None):
         type=str,
         default="train_controlnet",
         help=(
-            "The `project_name` argument passed to Accelerator.init_trackers for"""
-            " more information see https://huggingface.co/docs/accelerate/v0.17.0/en/package_reference/accelerator#accelerate.Accelerator"
+            "The `project_name` argument passed to Accelerator.init_trackers for"" more information see https://huggingface.co/docs/accelerate/v0.17.0/en/package_reference/accelerator#accelerate.Accelerator"
         ),
     )
     parser.add_argument(
@@ -780,7 +779,7 @@ def parse_args(input_args=None):
         "--lambda_reconstruction",
         type=float,
         default=1.0,
-        help="Weight for reconstruction loss.",
+        help="Weight for the reconstruction loss.",
     )
 
     if input_args is not None:
@@ -1048,6 +1047,10 @@ def main(args):
         logger.info("Initializing controlnet weights from unet")
         controlnet = ControlNetModel.from_unet(unet)
 
+    # 2023/09/14 add hirahara
+    if args.global_pool_conditions:
+        controlnet.config.global_pool_conditions = True
+
     # Initialize the ConditionAutoencoder
     condition_autoencoder = None
     if args.use_reconstruction_loss:
@@ -1055,36 +1058,42 @@ def main(args):
         condition_autoencoder = ConditionAutoencoder(unet)
 
 
-    # 2023/09/14 add hirahara
-    if args.global_pool_conditions:
-        controlnet.config.global_pool_conditions = True
-
     # `accelerate` 0.16.0 will have better support for customized saving
     if version.parse(accelerate.__version__) >= version.parse("0.16.0"):
         # create custom saving & loading hooks so that `accelerator.save_state(...)` serializes in a nice format
         def save_model_hook(models, weights, output_dir):
-            i = len(weights) - 1
-
-            while len(weights) > 0:
-                weights.pop()
-                model = models[i]
-
-                sub_dir = "controlnet"
+            # models: controlnet, condition_autoencoder
+            for i, model in enumerate(models):
+                sub_dir = "controlnet" if i == 0 else "condition_autoencoder"
                 model.save_pretrained(os.path.join(output_dir, sub_dir))
-
-                i -= 1
+                
+                # pop weights so that they are not saved again
+                weights.pop()
 
         def load_model_hook(models, input_dir):
-            while len(models) > 0:
+            # models: controlnet, condition_autoencoder
+            for i, model in enumerate(models):
                 # pop models so that they are not loaded again
-                model = models.pop()
-
+                model_ = models.pop()
+                
+                sub_dir = "controlnet" if i == 0 else "condition_autoencoder"
+                
                 # load diffusers style into model
-                load_model = ControlNetModel.from_pretrained(input_dir, subfolder="controlnet")
-                model.register_to_config(**load_model.config)
+                if sub_dir == "controlnet":
+                    load_model = ControlNetModel.from_pretrained(input_dir, subfolder=sub_dir)
+                else: # condition_autoencoder
+                    # This assumes ConditionAutoencoder can be loaded this way.
+                    # You might need a custom from_pretrained method for ConditionAutoencoder.
+                    # For now, we load state dict directly.
+                    class_obj = model_.__class__
+                    load_model = class_obj(unet) # requires unet to be in scope
+                    model_path = os.path.join(input_dir, sub_dir, "diffusion_pytorch_model.bin")
+                    load_model.load_state_dict(torch.load(model_path))
 
-                model.load_state_dict(load_model.state_dict())
+                model_.register_to_config(**load_model.config)
+                model_.load_state_dict(load_model.state_dict())
                 del load_model
+
 
         accelerator.register_save_state_pre_hook(save_model_hook)
         accelerator.register_load_state_pre_hook(load_model_hook)
@@ -1116,14 +1125,14 @@ def main(args):
 
     # Check that all trainable models are in full precision
     low_precision_error_string = (
-        " Please make sure to always have all model weights in full float32 precision when starting training - even if"""
-        " doing mixed precision training, copy of the weights should still be float32."
+        " Please make sure to always have all model weights in full float32 precision when starting training - even if"" doing mixed precision training, copy of the weights should still be float32."
     )
 
     if accelerator.unwrap_model(controlnet).dtype != torch.float32:
         raise ValueError(
             f"Controlnet loaded as datatype {accelerator.unwrap_model(controlnet).dtype}. {low_precision_error_string}"
         )
+    
     if args.use_reconstruction_loss and accelerator.unwrap_model(condition_autoencoder).dtype != torch.float32:
         raise ValueError(
             f"ConditionAutoencoder loaded as datatype {accelerator.unwrap_model(condition_autoencoder).dtype}. {low_precision_error_string}"
@@ -1140,7 +1149,7 @@ def main(args):
         )
 
     # Use 8-bit Adam for lower memory usage or to fine-tune the model in 16GB GPUs
-    if args.use_8bit_adam:
+    if args.use_8bit_adam):
         try:
             import bitsandbytes as bnb
         except ImportError:
@@ -1153,9 +1162,9 @@ def main(args):
         optimizer_class = torch.optim.AdamW
 
     # Optimizer creation
-    params_to_optimize = controlnet.parameters()
+    params_to_optimize = list(controlnet.parameters())
     if args.use_reconstruction_loss:
-        params_to_optimize = itertools.chain(controlnet.parameters(), condition_autoencoder.parameters())
+        params_to_optimize.extend(list(condition_autoencoder.parameters()))
 
     optimizer = optimizer_class(
         params_to_optimize,
@@ -1348,22 +1357,23 @@ def main(args):
                 else:
                     raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
                 
-                loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
+                noise_loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
                 
                 # Path B: Reconstruction
-                reconstruction_loss = torch.tensor(0.0, device=accelerator.device, dtype=loss.dtype)
+                reconstruction_loss = torch.tensor(0.0, device=accelerator.device)
                 if args.use_reconstruction_loss:
                     reconstructed_condition_image = condition_autoencoder(controlnet_image)
                     reconstruction_loss = F.l1_loss(reconstructed_condition_image.float(), controlnet_image.float(), reduction="mean")
-                    loss += args.lambda_reconstruction * reconstruction_loss
+                
+                # Total Loss
+                loss = noise_loss + args.lambda_reconstruction * reconstruction_loss
 
                 accelerator.backward(loss)
                 if accelerator.sync_gradients:
                     params_to_clip = controlnet.parameters()
                     if args.use_reconstruction_loss:
-                        params_to_clip = itertools.chain(controlnet.parameters(), condition_autoencoder.parameters())
+                        params_to_clip = list(params_to_clip) + list(condition_autoencoder.parameters())
                     accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
-                
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad(set_to_none=args.set_grads_to_none)
@@ -1415,4 +1425,109 @@ def main(args):
                                 continue
 
                             if label_key in args.fr_metrics:
-                                metric_mean = np.nanmean([log["metrics"Пожалуйста, предоставьте мне полный текст, который вы хотите проверить. Я проанализирую его на предмет некорректного экранирования и предложу исправленную версию в формате JSON.Please provide the text you want me to check. I will analyze it for incorrect escaping and provide the corrected version in JSON format. If no corrections are needed, I will return the original text. Once you provide the text, I will respond with a JSON object like this: `{
+                                metric_mean = np.nanmean([log["metrics"][label_key][args.fr_metrics_save_model] for log in image_logs])
+                                metric_good_symbol = util.ImageSimilarityCalculator.metrics_annotation(label_key)["symbol"]
+                            elif label_key in args.db_metrics:
+                                metric_mean = gen_dset_log["metrics"][label_key]
+                                metric_good_symbol = util.DatasetSimilarityCalculator.metrics_annotation(label_key)["symbol"]
+                            else:
+                                raise ValueError(f"Unknown label_key {label_key}")
+                            
+                            model_save_path = Path(args.output_dir) / "checkpoints" / f"best_{label_key}_checkpoint" / f"checkpoint-{global_step}_value-{str(metric_mean)[:10]}"
+
+                            if len(checkpoint_save_list[label_key]["values_q"]) > 0:
+                                if (metric_good_symbol == "^") and (checkpoint_save_list[label_key]["values_q"].max < metric_mean):
+                                    pass
+                                elif (metric_good_symbol == "v") and (checkpoint_save_list[label_key]["values_q"].min > metric_mean):
+                                    pass
+                                else:
+                                    continue
+                            
+                            shutil.copytree(str(last_model_save_path), str(model_save_path))
+
+                            cp_res = checkpoint_save_list[label_key]["checkpoints_q"].enqueue(model_save_path)
+                            val_res = checkpoint_save_list[label_key]["values_q"].enqueue(metric_mean)
+
+                            if cp_res is not None:
+                                shutil.rmtree(str(cp_res)))
+            logs = {"global_step":global_step, "loss": loss.detach().item(), "noise_loss": noise_loss.detach().item(), "recon_loss": reconstruction_loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
+            progress_bar.set_postfix(**logs)
+
+            if (accelerator.sync_gradients) and (image_logs is not None) and (gen_dset_log is not None) and (global_step % args.validation_steps == 0):
+                
+                metrics_logs = {}
+                
+                for metric_key in args.fr_metrics:
+                    temp = {f"{metric_key}/{k}_{calc_type}": {f"gen-{j}":v for j, v in enumerate([log["metrics"][
+metric_key][calc_type] for log in image_logs])} for k, calc_type in enumerate(args.fr_metrics_calc_types)}
+                    metrics_logs = metrics_logs|temp
+                    
+                # Distoribution-Based Metrics
+                if "metrics" in gen_dset_log.keys():
+                    logs = gen_dset_log["metrics"]|metrics_logs
+
+            accelerator.log(logs, step=global_step)
+
+
+            if (accelerator.sync_gradients) and (image_logs is not None) and (global_step % args.validation_steps == 0):
+                
+                # all-generate-images save
+                save_dir = Path(args.output_dir)/"image_logs_all"/f"s-{global_step}"
+                if not save_dir.exists():
+                    save_dir.mkdir(parents=True)
+                for i, log in enumerate(image_logs):
+                    target_img = log["validation_target_image"]
+                    source_img = log["validation_source_image"]
+                    generate_images = log["validation_generate_images"]
+                    images = [target_img, source_img] + generate_images
+                    img_save_path = save_dir/f"s-{global_step}_images-{i}.png"
+                    image_grid(images, 1, len(images)).save(str(img_save_path))
+                
+                # Full-Reference Metrics
+                validation_target_images = [log["validation_target_image"] for log in image_logs[:10]]
+                validation_source_images = [log["validation_source_image"] for log in image_logs[:10]]
+                generate_images = [g_img for log in image_logs[:10] for g_img in log["validation_generate_images"]]
+                images = validation_target_images + validation_source_images + generate_images
+                img_save_path = Path(args.output_dir)/Path(args.image_log_dir_name)/f"s-{global_step}_images_{0}.png"
+                save_img = image_grid(images, (len(images)//len(validation_target_images)), len(validation_target_images))
+                save_img.resize((round(save_img.width * 0.25), round(save_img.height * 0.25))).save(str(img_save_path))
+
+                # Distribution-Based Metrics
+                if "metrics" in gen_dset_log.keys():
+                    for graph_type in args.plot_graph_types:
+                        graph_output_path = Path(args.output_dir)/Path(args.plot_graph_dir_name)/graph_type/f"s-{global_step}_{graph_type}.png"
+                        cv2.imwrite(str(graph_output_path), gen_dset_log[graph_type])
+
+            if global_step >= args.max_train_steps:
+                break
+
+    # Create the pipeline using using the trained modules and save it.
+    accelerator.wait_for_everyone()
+    if accelerator.is_main_process:
+        controlnet = accelerator.unwrap_model(controlnet)
+        controlnet.save_pretrained(args.output_dir)
+        
+        if args.use_reconstruction_loss:
+            condition_autoencoder = accelerator.unwrap_model(condition_autoencoder)
+            condition_autoencoder.save_pretrained(os.path.join(args.output_dir, "condition_autoencoder"))
+
+
+        if args.push_to_hub:
+            save_model_card(
+                repo_id,
+                image_logs=image_logs,
+                base_model=args.pretrained_model_name_or_path,
+                repo_folder=args.output_dir,
+            )
+            upload_folder(
+                repo_id=repo_id,
+                folder_path=args.output_dir,
+                commit_message="End of training",
+                ignore_patterns=["step_*", "epoch_*"])
+
+    accelerator.end_training()
+
+
+if __name__ == "__main__":
+    args = parse_args()
+    main(args)
