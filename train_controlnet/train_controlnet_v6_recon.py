@@ -781,6 +781,17 @@ def parse_args(input_args=None):
         default=1.0,
         help="Weight for the reconstruction loss.",
     )
+    parser.add_argument(
+        "--binarize_reconstructed_image",
+        action="store_true",
+        help="Whether or not to binarize the reconstructed image before calculating reconstruction loss.",
+    )
+    parser.add_argument(
+        "--binarization_threshold",
+        type=float,
+        default=0.5,
+        help="Threshold for binarizing the reconstructed image.",
+    )
 
     if input_args is not None:
         args = parser.parse_args(input_args)
@@ -1363,7 +1374,20 @@ def main(args):
                 reconstruction_loss = torch.tensor(0.0, device=accelerator.device)
                 if args.use_reconstruction_loss:
                     reconstructed_condition_image = condition_autoencoder(controlnet_image)
-                    reconstruction_loss = F.l1_loss(reconstructed_condition_image.float(), controlnet_image.float(), reduction="mean")
+
+                    if args.binarize_reconstructed_image:
+                        reconstructed_condition_image = (reconstructed_condition_image > args.binarization_threshold).float()
+
+                    # マスクを作成して、元の条件画像が黒でない領域のみ損失を計算する
+                    mask = (controlnet_image > 0.0).any(dim=1, keepdim=True).float()
+                    
+                    loss_per_pixel = F.l1_loss(reconstructed_condition_image.float(), controlnet_image.float(), reduction="none")
+                    masked_loss = loss_per_pixel * mask
+                    
+                    if mask.sum() > 0:
+                        reconstruction_loss = masked_loss.sum() / mask.sum()
+                    else:
+                        reconstruction_loss = torch.tensor(0.0, device=accelerator.device)
                 
                 # Total Loss
                 loss = noise_loss + args.lambda_reconstruction * reconstruction_loss
