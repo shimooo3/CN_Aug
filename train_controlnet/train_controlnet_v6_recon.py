@@ -99,6 +99,9 @@ class ConditionAutoencoder(nn.Module):
         
         # 重みをゼロから初期化
         self.apply(self._init_weights)
+        
+        # time_embedding_dim を unet から取得
+        self.time_embed_dim = unet.config.block_out_channels[0] * 4
 
     def _init_weights(self, m):
         if isinstance(m, (nn.Conv2d, nn.Linear)):
@@ -107,6 +110,12 @@ class ConditionAutoencoder(nn.Module):
                 nn.init.zeros_(m.bias)
 
     def forward(self, condition_image):
+        # Dummy time embedding
+        batch_size = condition_image.shape[0]
+        device = condition_image.device
+        dtype = self.conv_in.weight.dtype
+        temb = torch.zeros(batch_size, self.time_embed_dim, device=device, dtype=dtype)
+
         # Encoder
         x = self.conv_in(condition_image)
         down_block_res_samples = (x,)
@@ -115,10 +124,11 @@ class ConditionAutoencoder(nn.Module):
                 # Cross-attentionは使用しないので、ダミーのencoder_hidden_statesを渡す
                 x, res_samples = downsample_block(
                     hidden_states=x,
+                    temb=temb,
                     encoder_hidden_states=None,
                 )
             else:
-                x, res_samples = downsample_block(hidden_states=x)
+                x, res_samples = downsample_block(hidden_states=x, temb=temb)
             down_block_res_samples += res_samples
 
         # Decoder
@@ -128,13 +138,13 @@ class ConditionAutoencoder(nn.Module):
             if hasattr(upsample_block, "has_cross_attention") and upsample_block.has_cross_attention:
                 x = upsample_block(
                     hidden_states=x,
-                    temb=None,
+                    temb=temb,
                     res_hidden_states_tuple=res_samples,
                     encoder_hidden_states=None,
                 )
             else:
                 x = upsample_block(
-                    hidden_states=x, temb=None, res_hidden_states_tuple=res_samples
+                    hidden_states=x, temb=temb, res_hidden_states_tuple=res_samples
                 )
         
         reconstructed_image = self.conv_out(x)
