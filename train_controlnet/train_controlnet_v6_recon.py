@@ -102,6 +102,7 @@ class ConditionAutoencoder(nn.Module):
         
         # time_embedding_dim を unet から取得
         self.time_embed_dim = unet.config.block_out_channels[0] * 4
+        self.cross_attention_dim = unet.config.cross_attention_dim
 
     def _init_weights(self, m):
         if isinstance(m, (nn.Conv2d, nn.Linear)):
@@ -116,6 +117,10 @@ class ConditionAutoencoder(nn.Module):
         dtype = self.conv_in.weight.dtype
         temb = torch.zeros(batch_size, self.time_embed_dim, device=device, dtype=dtype)
 
+        # Dummy encoder hidden states
+        context_seq_len = 77
+        dummy_context = torch.zeros(batch_size, context_seq_len, self.cross_attention_dim, device=device, dtype=dtype)
+
         # Encoder
         x = self.conv_in(condition_image)
         down_block_res_samples = (x,)
@@ -125,7 +130,7 @@ class ConditionAutoencoder(nn.Module):
                 x, res_samples = downsample_block(
                     hidden_states=x,
                     temb=temb,
-                    encoder_hidden_states=None,
+                    encoder_hidden_states=dummy_context,
                 )
             else:
                 x, res_samples = downsample_block(hidden_states=x, temb=temb)
@@ -140,7 +145,7 @@ class ConditionAutoencoder(nn.Module):
                     hidden_states=x,
                     temb=temb,
                     res_hidden_states_tuple=res_samples,
-                    encoder_hidden_states=None,
+                    encoder_hidden_states=dummy_context,
                 )
             else:
                 x = upsample_block(
