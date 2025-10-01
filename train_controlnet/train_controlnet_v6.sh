@@ -12,6 +12,7 @@ output_dir_name="../model/controlnet"
 validation_checkpoints_steps=50
 
 accelerate launch "../train_controlnet_v6_recon.py" \
+    --controlnet_model_name_or_path="../__model__/01_controlnet_canny/20231229-0049_3e-4/checkpoints/best_LPIPS_SQ_checkpoint/checkpoint-14800_value-0.12218771/controlnet/" \
     --pretrained_model_name_or_path="stabilityai/stable-diffusion-2-1-base" \
     --output_dir=$output_dir_name \
     \
