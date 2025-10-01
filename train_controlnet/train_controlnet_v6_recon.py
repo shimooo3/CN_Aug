@@ -79,7 +79,7 @@ class ConditionAutoencoder(nn.Module):
         super().__init__()
         # U-Netのエンコーダ部分をコピー
         self.conv_in = nn.Conv2d(
-            unet.conv_in.in_channels,
+            3,
             unet.conv_in.out_channels,
             kernel_size=unet.conv_in.kernel_size,
             stride=unet.conv_in.stride,
@@ -91,7 +91,7 @@ class ConditionAutoencoder(nn.Module):
         self.up_blocks = nn.ModuleList(unet.up_blocks)
         self.conv_out = nn.Conv2d(
             unet.conv_out.in_channels,
-            unet.conv_out.out_channels,
+            3,
             kernel_size=unet.conv_out.kernel_size,
             stride=unet.conv_out.stride,
             padding=unet.conv_out.padding,
@@ -778,7 +778,7 @@ def parse_args(input_args=None):
     parser.add_argument(
         "--lambda_reconstruction",
         type=float,
-        default=1.0,
+        default=0.3,
         help="Weight for the reconstruction loss.",
     )
     parser.add_argument(
@@ -1144,9 +1144,9 @@ def main(args):
             f"Controlnet loaded as datatype {accelerator.unwrap_model(controlnet).dtype}. {low_precision_error_string}"
         )
     
-    if args.use_reconstruction_loss and accelerator.unwrap_model(condition_autoencoder).dtype != torch.float32:
+    if args.use_reconstruction_loss and next(accelerator.unwrap_model(condition_autoencoder).parameters()).dtype != torch.float32:
         raise ValueError(
-            f"ConditionAutoencoder loaded as datatype {accelerator.unwrap_model(condition_autoencoder).dtype}. {low_precision_error_string}"
+            f"ConditionAutoencoder loaded as datatype {next(accelerator.unwrap_model(condition_autoencoder).parameters()).dtype}. {low_precision_error_string}"
         )
 
     # Enable TF32 for faster training on Ampere GPUs,
