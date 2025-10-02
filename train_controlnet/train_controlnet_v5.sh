@@ -7,11 +7,12 @@ train_data_dir="../__dataset__/04-1_controlnet_keypoint/train/train/"
 train_data_num=$(wc -l < "${train_data_dir}/prompt.json")
 
 today=`date "+%Y%m%d-%H%M"`
-output_dir_name="../model/controlnet"
+output_dir_name="../__output__/02-1_controlnet_keypoint/condition_weight/_${today}"
 
 validation_checkpoints_steps=50
 
-accelerate launch "../train_controlnet_v5_feature.py" \
+accelerate launch "../train_controlnet_v5.py" \
+    --controlnet_model_name_or_path="../__model__/01_controlnet_canny/20231229-0049_3e-4/checkpoints/best_LPIPS_SQ_checkpoint/checkpoint-14800_value-0.12218771/controlnet/" \
     --pretrained_model_name_or_path="stabilityai/stable-diffusion-2-1-base" \
     --output_dir=$output_dir_name \
     \
@@ -31,7 +32,6 @@ accelerate launch "../train_controlnet_v5_feature.py" \
     --fr_metrics_save_model "object"\
     --db_metrics "FID" "KID"\
     --plot_graph_types "pca" "tsne"\
-    \
     --max_train_steps=5000 \
     --train_batch_size=1 \
     --learning_rate=$learning_rate \
@@ -46,7 +46,7 @@ accelerate launch "../train_controlnet_v5_feature.py" \
     --seed=42 \
 
 
-cp "./nohup.out" "$output_dir_name/nohup.out"
-: > "./nohup.out"
+# cp "./nohup.out" "$output_dir_name/nohup.out"
+# : > "./nohup.out"
 
-cp "$0" "$output_dir_name/$0"
+# cp "$0" "$output_dir_name/$0"
