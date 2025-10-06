@@ -1136,10 +1136,9 @@ def main(args):
         eps=args.adam_epsilon,
     )
 
-    discriminator = Discriminator(input_channels=3).to("cuda")
+    discriminator = Discriminator(input_channels=3)
 
     disc_optimizer = torch.optim.Adam(discriminator.parameters(), lr=1e-4, betas=(0.5, 0.999))
-    optimizer, disc_optimizer = accelerator.prepare(optimizer, disc_optimizer)
 
     train_dataset = make_train_dataset(args, tokenizer, accelerator)
 
@@ -1168,8 +1167,8 @@ def main(args):
     )
 
     # Prepare everything with our `accelerator`.
-    controlnet, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-        controlnet, optimizer, train_dataloader, lr_scheduler
+    controlnet, discriminator, optimizer, disc_optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+        controlnet, discriminator, optimizer, disc_optimizer, train_dataloader, lr_scheduler
     )
 
     # For mixed precision training we cast the text_encoder and vae weights to half-precision
@@ -1269,7 +1268,7 @@ def main(args):
                             }
     for epoch in range(first_epoch, args.num_train_epochs):
         for step, batch in enumerate(train_dataloader):
-            with accelerator.accumulate(controlnet):
+            with accelerator.accumulate(controlnet, discriminator):
                 # Convert images to latent space
                 latents = vae.encode(batch["pixel_values"].to(dtype=weight_dtype)).latent_dist.sample()
                 latents = latents * vae.config.scaling_factor
@@ -1325,11 +1324,8 @@ def main(args):
                     mid_block_additional_residual=weighted_mid_block_res_sample.to(dtype=weight_dtype),
                 ).sample
 
-                generated_images = vae.decode(model_pred).sample
-                generated_images = (generated_images / 2 + 0.5).clamp(0, 1)
-                disc_real = discriminator(batch["pixel_values"])
-                disc_fake = discriminator(generated_images.float())
-                adv_loss = F.binary_cross_entropy(disc_fake, torch.ones_like(disc_fake)) + F.binary_cross_entropy(disc_real, torch.zeros_like(disc_real))
+                # --- Train Generator ---
+                optimizer.zero_grad(set_to_none=args.set_grads_to_none)
 
                 # Get the target for loss depending on the prediction type
                 if noise_scheduler.config.prediction_type == "epsilon":
@@ -1338,16 +1334,37 @@ def main(args):
                     target = noise_scheduler.get_velocity(latents, noise, timesteps)
                 else:
                     raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
-                loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean") + 0.1 * adv_loss
+                loss_mse = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
+
+                # Adversarial Loss for Generator
+                generated_images = vae.decode(model_pred).sample
+                generated_images = (generated_images / 2 + 0.5).clamp(0, 1)
+                disc_fake_pred = discriminator(generated_images.float())
+                loss_gen_adv = F.binary_cross_entropy(disc_fake_pred, torch.ones_like(disc_fake_pred))
+
+                # Total Generator Loss
+                loss = loss_mse + 0.1 * loss_gen_adv
 
                 accelerator.backward(loss)
                 if accelerator.sync_gradients:
                     params_to_clip = controlnet.parameters()
                     accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
                 optimizer.step()
-                disc_optimizer.step()
                 lr_scheduler.step()
-                optimizer.zero_grad(set_to_none=args.set_grads_to_none)
+
+                # --- Train Discriminator ---
+                disc_optimizer.zero_grad(set_to_none=args.set_grads_to_none)
+
+                disc_real_pred = discriminator(batch["pixel_values"])
+                loss_disc_real = F.binary_cross_entropy(disc_real_pred, torch.ones_like(disc_real_pred))
+
+                disc_fake_pred = discriminator(generated_images.detach()) # detach here
+                loss_disc_fake = F.binary_cross_entropy(disc_fake_pred, torch.zeros_like(disc_fake_pred))
+
+                loss_disc = (loss_disc_real + loss_disc_fake) / 2
+
+                accelerator.backward(loss_disc)
+                disc_optimizer.step()
 
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients:
@@ -1422,7 +1439,7 @@ def main(args):
                             if cp_res is not None:
                                 shutil.rmtree(str(cp_res))
                                 
-            logs = {"global_step":global_step, "loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
+            logs = {"global_step":global_step, "loss": loss.detach().item(), "disc_loss": loss_disc.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
             progress_bar.set_postfix(**logs)
 
             if (accelerator.sync_gradients) and (image_logs is not None) and (gen_dset_log is not None) and (global_step % args.validation_steps == 0):
