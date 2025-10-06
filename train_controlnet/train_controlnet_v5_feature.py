@@ -756,13 +756,13 @@ def parse_args(input_args=None):
     parser.add_argument(
         "--conditioning_weighting_start",
         type=float,
-        default=1.0,
+        default=0.8,
         help="The weight for conditioning at timestep 0. Defaults to 1.0.",
     )
     parser.add_argument(
         "--conditioning_weighting_end",
         type=float,
-        default=0.0,
+        default=0.1,
         help="The weight for conditioning at the final timestep. Defaults to 0.0.",
     )
     parser.add_argument(
@@ -1301,7 +1301,6 @@ def main(args):
                 # Timestep-based weighting for conditioning, controlled by command-line arguments.
                 interpolation_factor = timesteps.float() / (noise_scheduler.config.num_train_timesteps - 1)
                 interpolation_factor = 1 - interpolation_factor
-                ## 2乗するかどうかは要検証
                 interpolation_factor = torch.pow(interpolation_factor, args.conditioning_weighting_power)
                 
                 timestep_weights = args.conditioning_weighting_start + \
