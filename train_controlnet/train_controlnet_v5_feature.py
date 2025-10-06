@@ -1044,28 +1044,36 @@ def main(args):
     if version.parse(accelerate.__version__) >= version.parse("0.16.0"):
         # create custom saving & loading hooks so that `accelerator.save_state(...)` serializes in a nice format
         def save_model_hook(models, weights, output_dir):
-            i = len(weights) - 1
-
+            i = len(models) - 1
             while len(weights) > 0:
                 weights.pop()
                 model = models[i]
 
-                sub_dir = "controlnet"
-                model.save_pretrained(os.path.join(output_dir, sub_dir))
+                unwrapped_model = accelerator.unwrap_model(model)
 
+                if isinstance(unwrapped_model, ControlNetModel):
+                    sub_dir = "controlnet"
+                    unwrapped_model.save_pretrained(os.path.join(output_dir, sub_dir))
+                elif isinstance(unwrapped_model, Discriminator):
+                    torch.save(unwrapped_model.state_dict(), os.path.join(output_dir, "discriminator.pt"))
+                else:
+                    logger.warn(f"Unknown model type {type(unwrapped_model)} in save_model_hook. Not saving.")
+                
                 i -= 1
 
         def load_model_hook(models, input_dir):
             while len(models) > 0:
-                # pop models so that they are not loaded again
-                model = models.pop()
+                model = models.pop()  # Pops from the end, so discriminator first
 
-                # load diffusers style into model
-                load_model = ControlNetModel.from_pretrained(input_dir, subfolder="controlnet")
-                model.register_to_config(**load_model.config)
-
-                model.load_state_dict(load_model.state_dict())
-                del load_model
+                if isinstance(accelerator.unwrap_model(model), ControlNetModel):
+                    load_model = ControlNetModel.from_pretrained(input_dir, subfolder="controlnet")
+                    model.register_to_config(**load_model.config)
+                    model.load_state_dict(load_model.state_dict())
+                    del load_model
+                elif isinstance(accelerator.unwrap_model(model), Discriminator):
+                    model.load_state_dict(torch.load(os.path.join(input_dir, "discriminator.pt")))
+                else:
+                    logger.warn(f"Unknown model type {type(accelerator.unwrap_model(model))} in load_model_hook. Not loading.")
 
         accelerator.register_save_state_pre_hook(save_model_hook)
         accelerator.register_load_state_pre_hook(load_model_hook)
