@@ -1345,13 +1345,14 @@ def main(args):
                 loss_mse = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
 
                 # Adversarial Loss for Generator
-                generated_images = vae.decode(model_pred).sample
-                generated_images = (generated_images / 2 + 0.5).clamp(0, 1)
-                disc_fake_pred = discriminator(generated_images.float())
-                loss_gen_adv = F.binary_cross_entropy(disc_fake_pred, torch.ones_like(disc_fake_pred))
+                # generated_images = vae.decode(model_pred).sample
+                # generated_images = (generated_images / 2 + 0.5).clamp(0, 1)
+                # disc_fake_pred = discriminator(generated_images.float())
+                # loss_gen_adv = F.binary_cross_entropy(disc_fake_pred, torch.ones_like(disc_fake_pred))
 
                 # Total Generator Loss
-                loss = loss_mse + 0.1 * loss_gen_adv
+                # loss = loss_mse + 0.1 * loss_gen_adv
+                loss = loss_mse
 
                 accelerator.backward(loss)
                 if accelerator.sync_gradients:
