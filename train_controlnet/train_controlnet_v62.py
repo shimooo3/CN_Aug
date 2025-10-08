@@ -263,12 +263,9 @@ def log_validation(vae, text_encoder, tokenizer, unet, controlnet, args, acceler
         features_list.append(util.get_Inceptionv3_features(generate_image_dataset))
         
         plotter = util.TensorPlotter(features_list, labels=["original", "generate"])
-        plot_title_append_text = "
-"+f"[step-{step}]"+"
-"
-        plot_title_append_text += "
-".join([f"{sim_key} : {str(db_iqa_metrics[sim_key])[:10]}" for sim_key in args.db_metrics])
-        
+        plot_title_append_text = "\n"+f"[step-{step}]"+"\n"
+        plot_title_append_text += "\n".join([f"{sim_key} : {str(db_iqa_metrics[sim_key])[:10]}" for sim_key in args.db_metrics])
+
         gen_dset_log["metrics"] = db_iqa_metrics
         for graph_type in args.plot_graph_types:
             gen_dset_log[graph_type] = plotter.get_plot_2d_3d(graph_type, plot_title_append=plot_title_append_text)
@@ -339,19 +336,16 @@ def import_model_class_from_model_name_or_path(pretrained_model_name_or_path: st
 def save_model_card(repo_id: str, image_logs=None, base_model=str, repo_folder=None):
     img_str = ""
     if image_logs is not None:
-        img_str = "You can find some example images below.
-"
+        img_str = "You can find some example images below."
         for i, log in enumerate(image_logs):
             images = log["images"]
             validation_prompt = log["validation_prompt"]
             validation_image = log["validation_image"]
             validation_image.save(os.path.join(repo_folder, "image_control.png"))
-            img_str += f"prompt: {validation_prompt}
-"
+            img_str += f"prompt: {validation_prompt}"
             images = [validation_image] + images
             image_grid(images, 1, len(images)).save(os.path.join(repo_folder, f"images_{i}.png"))
-            img_str += f"![images_{i})](./images_{i}.png)
-"
+            img_str += f"![images_{i})](./images_{i}.png)"
 
     yaml = f"""
 ---
