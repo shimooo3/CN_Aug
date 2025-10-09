@@ -16,6 +16,8 @@
 # Base Code
 # https://github.com/huggingface/diffusers/blob/main/examples/controlnet/train_controlnet.py
 
+## VRAMが小さすぎる
+
 import cv2
 import argparse
 import logging
