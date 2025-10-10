@@ -25,3 +25,5 @@ cuda out of memory
 
 ## vscodeの入力
 |ではなく白い箱が出ているときは挿入モードとなっている．Ins(insert)キーを押せば治る
+
+## 減らないnoise_loss
