@@ -16,8 +16,6 @@
 # Base Code
 # https://github.com/huggingface/diffusers/blob/main/examples/controlnet/train_controlnet.py
 
-## VRAMが小さすぎる
-
 import cv2
 import argparse
 import logging
@@ -717,6 +715,14 @@ def parse_args(input_args=None):
         ),
     )
     parser.add_argument(
+        "--recon_decoder_log_dir_name",
+        type=str,
+        default="recon_decoder_logs",
+        help=(
+            "The directory where the reconstructed conditioning images will be saved. (added)"
+        ),
+    )
+    parser.add_argument(
         "--train_data_files",
         type=str,
         default=None,
@@ -1002,6 +1008,8 @@ def main(args):
             os.makedirs(args.output_dir, exist_ok=True)
         if not (Path(args.output_dir)/Path(args.image_log_dir_name)).exists():
             (Path(args.output_dir)/Path(args.image_log_dir_name)).mkdir(exist_ok=True)
+        if not (Path(args.output_dir)/Path(args.recon_decoder_log_dir_name)).exists():
+            (Path(args.output_dir)/Path(args.recon_decoder_log_dir_name)).mkdir(exist_ok=True)
         if not (Path(args.output_dir)/Path(args.plot_graph_dir_name)).exists():
             (Path(args.output_dir)/Path(args.plot_graph_dir_name)).mkdir(exist_ok=True)
             for graph_type in args.plot_graph_types:
@@ -1286,6 +1294,8 @@ def main(args):
                                 for key in ["last"]+args.fr_metrics+args.db_metrics
                             }
     for epoch in range(first_epoch, args.num_train_epochs):
+        last_reconstructed_cond_image = None
+        last_target_cond_image = None
         for step, batch in enumerate(train_dataloader):
             with accelerator.accumulate(controlnet):
                 # Convert images to latent space
@@ -1322,6 +1332,10 @@ def main(args):
                 # The conditioning image is RGB, but should be grayscale.
                 # We'll take one channel (e.g., R) since it's B&W.
                 target_cond_image = batch["conditioning_pixel_values"][:, 0:1, :, :].to(device=reconstructed_cond_image.device, dtype=reconstructed_cond_image.dtype)
+
+                last_reconstructed_cond_image = reconstructed_cond_image
+                last_target_cond_image = target_cond_image
+
                 
                 # Ignore black regions in loss, focusing on white regions.
                 mask = (target_cond_image > 0.5).float()
@@ -1398,6 +1412,26 @@ def main(args):
                         pipeline.to_json_file(last_model_save_path/"model_index.json")
                         logger.info(f"Saved state to {str(last_model_save_path)}")
 
+                        if last_reconstructed_cond_image is not None:
+                            num_images_to_save = 4
+                            num_images_to_save = min(num_images_to_save, last_target_cond_image.shape[0])
+
+                            target_images = last_target_cond_image.detach().cpu().float()
+                            recon_images = last_reconstructed_cond_image.detach().cpu().float()
+
+                            pil_images = []
+                            to_pil = transforms.ToPILImage()
+
+                            for i in range(num_images_to_save):
+                                target_pil = to_pil(target_images[i])
+                                recon_pil = to_pil(recon_images[i])
+                                pil_images.append(target_pil)
+                                pil_images.append(recon_pil)
+
+                            if len(pil_images) > 0:
+                                grid = image_grid(pil_images, rows=num_images_to_save, cols=2)
+                                save_path = Path(args.output_dir) / args.recon_decoder_log_dir_name / f"step_{global_step}.png"
+                                grid.save(str(save_path))
 
                         for label_key in checkpoint_save_list.keys():
                             if label_key == "last":
