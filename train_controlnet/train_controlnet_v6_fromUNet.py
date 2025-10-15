@@ -1367,8 +1367,8 @@ def main(args):
                 # Ignore black regions in loss, focusing on white regions.
                 mask = (target_cond_image > 0.5).float()
                 
-                # Reconstruction loss (L1 loss on white areas)
-                recon_loss = F.l1_loss(reconstructed_cond_image, target_cond_image, reduction="none")
+                # Reconstruction loss (MSE loss on white areas)
+                recon_loss = F.mse_loss(reconstructed_cond_image, target_cond_image, reduction="none")
                 recon_loss = (recon_loss * mask).sum() / (mask.sum() + 1e-8)
 
                 # Get the target for loss depending on the prediction type
