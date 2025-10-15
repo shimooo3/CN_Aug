@@ -119,76 +119,6 @@ def image_grid(imgs, rows, cols):
     return grid
 
 
-def log_validation_stage1(controlnet, reconstruction_decoder, tokenizer, args, accelerator, weight_dtype, step):
-    logger.info("Running validation for Stage 1...")
-
-    controlnet = accelerator.unwrap_model(controlnet)
-    reconstruction_decoder = accelerator.unwrap_model(reconstruction_decoder)
-
-    # Get validation conditioning images
-    val_source_coco = COCO_dataset(args.validation_source_coco)
-    validation_gids = random.sample(val_source_coco.get_imgId_list(), args.num_validation_images)
-    
-    val_cond_images_pil = [Image.open(val_source_coco.image(gid).get_filePath()).convert("RGB") for gid in validation_gids]
-
-    # Prepare transforms
-    conditioning_image_transforms = transforms.Compose(
-        [
-            transforms.Resize(args.resolution, interpolation=transforms.InterpolationMode.BILINEAR),
-            transforms.CenterCrop(args.resolution),
-            transforms.ToTensor(),
-        ]
-    )
-
-    original_images_pil = []
-    recon_images_pil = []
-    total_val_recon_loss = 0.0
-
-    text_encoder_config = PretrainedConfig.from_pretrained(args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision)
-
-    with torch.no_grad():
-        for cond_image_pil in val_cond_images_pil:
-            cond_image_tensor = conditioning_image_transforms(cond_image_pil).unsqueeze(0).to(accelerator.device, dtype=weight_dtype)
-
-            bsz = 1
-            dummy_sample = torch.zeros(bsz, 4, args.resolution // 8, args.resolution // 8, device=accelerator.device, dtype=weight_dtype)
-            dummy_timestep = torch.zeros(bsz, device=accelerator.device).long()
-            dummy_encoder_hidden_states = torch.zeros(bsz, tokenizer.model_max_length, text_encoder_config.hidden_size, device=accelerator.device, dtype=weight_dtype)
-
-            _, mid_block_res_sample = controlnet(
-                dummy_sample,
-                dummy_timestep,
-                encoder_hidden_states=dummy_encoder_hidden_states,
-                controlnet_cond=cond_image_tensor,
-                return_dict=False,
-            )
-            reconstructed_cond_image = reconstruction_decoder(mid_block_res_sample.to(dtype=weight_dtype))
-
-            target_cond_image = cond_image_tensor[:, 0:1, :, :]
-            mask = (target_cond_image > 0.5).float()
-            recon_loss = F.l1_loss(reconstructed_cond_image, target_cond_image, reduction="none")
-            recon_loss = (recon_loss * mask).sum() / (mask.sum() + 1e-8)
-            total_val_recon_loss += recon_loss.item()
-
-            recon_image_pil = transforms.ToPILImage()(reconstructed_cond_image.squeeze(0).cpu())
-            original_mono_pil = transforms.ToPILImage()(target_cond_image.squeeze(0).cpu())
-
-            original_images_pil.append(original_mono_pil)
-            recon_images_pil.append(recon_image_pil)
-
-    if len(original_images_pil) > 0:
-        pil_images = original_images_pil + recon_images_pil
-        grid = image_grid(pil_images, rows=2, cols=args.num_validation_images)
-        save_path = Path(args.output_dir) / args.recon_decoder_log_dir_name / f"step_{step}_val.png"
-        grid.save(str(save_path))
-        logger.info(f"Saved validation reconstruction grid to {save_path}")
-
-    avg_val_recon_loss = total_val_recon_loss / len(val_cond_images_pil)
-    accelerator.log({"val_recon_loss": avg_val_recon_loss}, step=step)
-    
-    return avg_val_recon_loss, {}
-
-
 def log_validation(vae, text_encoder, tokenizer, unet, controlnet, args, accelerator, weight_dtype, step):
     logger.info("Running validation... ")
 
@@ -455,18 +385,6 @@ def parse_args(input_args=None):
         default=None,
         help="Path to pretrained controlnet model or model identifier from huggingface.co/models."
         " If not specified controlnet weights are initialized from unet.",
-    )
-    parser.add_argument(
-        "--controlnet_model_name_or_path_for_merge",
-        type=str,
-        default=None,
-        help="Path to a second pretrained controlnet model for merging before stage 2 training."
-    )
-    parser.add_argument(
-        "--controlnet_merge_alpha",
-        type=float,
-        default=0.5,
-        help="The weight for merging two controlnet models (alpha). The merged weights will be alpha * W1 + (1 - alpha) * W2."
     )
     parser.add_argument(
         "--revision",
@@ -865,13 +783,6 @@ def parse_args(input_args=None):
         default=1.0,
         help="Weight for the reconstruction loss.",
     )
-    parser.add_argument(
-        "--training_stage",
-        type=str,
-        default="stage2",
-        choices=["stage1", "stage2"],
-        help="The training stage: 'stage1' for pre-training, 'stage2' for fine-tuning."
-    )
 
     if input_args is not None:
         args = parser.parse_args(input_args)
@@ -1133,37 +1044,7 @@ def main(args):
         args.pretrained_model_name_or_path, subfolder="unet", revision=args.revision
     )
 
-    if args.training_stage == "stage2" and args.controlnet_model_name_or_path_for_merge is not None:
-        if not args.controlnet_model_name_or_path:
-            raise ValueError(
-                "`--controlnet_model_name_or_path` must be provided for merging in stage 2."
-                " This should be the path to the model from stage 1."
-            )
-        
-        logger.info(f"Merging two ControlNet models for stage 2 training.")
-        alpha = args.controlnet_merge_alpha
-        logger.info(f"Model 1 (alpha={alpha}): {args.controlnet_model_name_or_path}")
-        logger.info(f"Model 2 (1-alpha): {args.controlnet_model_name_or_path_for_merge}")
-
-        # Load model 1
-        controlnet = ControlNetModel.from_pretrained(args.controlnet_model_name_or_path)
-        
-        # Load model 2
-        controlnet_to_merge = ControlNetModel.from_pretrained(args.controlnet_model_name_or_path_for_merge)
-        params2 = controlnet_to_merge.state_dict()
-
-        # Iterate over primary model's parameters and merge
-        with torch.no_grad():
-            for name, param1 in tqdm(controlnet.named_parameters(), desc="Merging controlnet weights"):
-                if name in params2:
-                    param2_tensor = params2[name]
-                    param1.data.copy_(alpha * param1.data + (1 - alpha) * param2_tensor.to(device=param1.device, dtype=param1.dtype))
-        
-        del controlnet_to_merge, params2 # free memory
-        torch.cuda.empty_cache()
-        logger.info("Successfully merged ControlNet models.")
-
-    elif args.controlnet_model_name_or_path:
+    if args.controlnet_model_name_or_path:
         logger.info("Loading existing controlnet weights")
         controlnet = ControlNetModel.from_pretrained(args.controlnet_model_name_or_path)
     else:
@@ -1277,15 +1158,7 @@ def main(args):
     reconstruction_decoder = ReconstructionDecoder(in_channels=1280)
 
     # Optimizer creation
-    if args.training_stage == "stage1":
-        logger.info("Training in Stage 1: Optimizing ControlNet and Reconstruction Decoder.")
-        params_to_optimize = list(controlnet.parameters()) + list(reconstruction_decoder.parameters())
-        text_encoder_config = PretrainedConfig.from_pretrained(args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision)
-    elif args.training_stage == "stage2":
-        logger.info("Training in Stage 2: Optimizing ControlNet only.")
-        params_to_optimize = controlnet.parameters()
-        reconstruction_decoder.requires_grad_(False)
-    
+    params_to_optimize = list(controlnet.parameters()) + list(reconstruction_decoder.parameters())
     optimizer = optimizer_class(
         params_to_optimize,
         lr=args.learning_rate,
@@ -1337,6 +1210,20 @@ def main(args):
     vae.to(accelerator.device, dtype=weight_dtype)
     unet.to(accelerator.device, dtype=weight_dtype)
     text_encoder.to(accelerator.device, dtype=weight_dtype)
+
+    # Hook to capture the output of the UNet's mid_block. This will be used as input to the reconstruction decoder.
+    captured_features = {}
+
+    def get_unet_mid_block_hook(name):
+        def hook(model, input, output):
+            if isinstance(output, tuple):
+                captured_features[name] = output[0]
+            else:
+                captured_features[name] = output
+
+        return hook
+
+    hook_handle = unet.mid_block.register_forward_hook(get_unet_mid_block_hook("mid_block_output"))
 
     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
     num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
@@ -1420,100 +1307,84 @@ def main(args):
                                     } 
                                 for key in ["last"]+args.fr_metrics+args.db_metrics
                             }
-    if args.training_stage == "stage1":
-        checkpoint_save_list["recon_loss"] = {"checkpoints_q": util.Custom_Q(1), "values_q": util.Custom_Q(1)}
-
-    avg_val_recon_loss = None
     for epoch in range(first_epoch, args.num_train_epochs):
         last_reconstructed_cond_image = None
         last_target_cond_image = None
         for step, batch in enumerate(train_dataloader):
             with accelerator.accumulate(controlnet):
-                if args.training_stage == "stage1":
-                    # Stage 1: Only reconstruction loss.
-                    controlnet_image = batch["conditioning_pixel_values"].to(dtype=weight_dtype)
-                    bsz = controlnet_image.shape[0]
+                # Convert images to latent space
+                latents = vae.encode(batch["pixel_values"].to(dtype=weight_dtype)).latent_dist.sample()
+                latents = latents * vae.config.scaling_factor
 
-                    # We pass zero tensors to the controlnet as we are not interested in the diffusion process.
-                    latents = torch.zeros(bsz, 4, args.resolution // 8, args.resolution // 8, device=accelerator.device, dtype=weight_dtype)
-                    timesteps = torch.zeros(bsz, device=accelerator.device).long()
-                    
-                    # text_encoder_config is defined before the loop
-                    encoder_hidden_states = torch.zeros(bsz, tokenizer.model_max_length, text_encoder_config.hidden_size, device=accelerator.device, dtype=weight_dtype)
+                # Sample noise that we'll add to the latents
+                noise = torch.randn_like(latents)
+                bsz = latents.shape[0]
+                # Sample a random timestep for each image
+                timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (bsz,), device=latents.device)
+                timesteps = timesteps.long()
 
-                    _, mid_block_res_sample = controlnet(
-                        latents,
-                        timesteps,
-                        encoder_hidden_states=encoder_hidden_states,
-                        controlnet_cond=controlnet_image,
-                        return_dict=False,
-                    )
-                    
-                    reconstructed_cond_image = reconstruction_decoder(mid_block_res_sample.to(dtype=weight_dtype))
-                    target_cond_image = batch["conditioning_pixel_values"][:, 0:1, :, :].to(device=reconstructed_cond_image.device, dtype=reconstructed_cond_image.dtype)
-                    
-                    last_reconstructed_cond_image = reconstructed_cond_image
-                    last_target_cond_image = target_cond_image
+                # Add noise to the latents according to the noise magnitude at each timestep
+                # (this is the forward diffusion process)
+                noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
-                    mask = (target_cond_image > 0.5).float()
-                    recon_loss = F.l1_loss(reconstructed_cond_image, target_cond_image, reduction="none")
-                    recon_loss = (recon_loss * mask).sum() / (mask.sum() + 1e-8)
-                    
-                    loss = recon_loss
-                    noise_loss = torch.tensor(0.0, device=accelerator.device)
+                # Get the text embedding for conditioning
+                encoder_hidden_states = text_encoder(batch["input_ids"])[0]
 
-                elif args.training_stage == "stage2":
-                    # Stage 2: Standard training with noise loss only
-                    latents = vae.encode(batch["pixel_values"].to(dtype=weight_dtype)).latent_dist.sample()
-                    latents = latents * vae.config.scaling_factor
+                controlnet_image = batch["conditioning_pixel_values"].to(dtype=weight_dtype)
 
-                    noise = torch.randn_like(latents)
-                    bsz = latents.shape[0]
-                    timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (bsz,), device=latents.device).long()
-                    noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
-                    encoder_hidden_states = text_encoder(batch["input_ids"])[0]
-                    controlnet_image = batch["conditioning_pixel_values"].to(dtype=weight_dtype)
+                down_block_res_samples, mid_block_res_sample = controlnet(
+                    noisy_latents,
+                    timesteps,
+                    encoder_hidden_states=encoder_hidden_states,
+                    controlnet_cond=controlnet_image,
+                    return_dict=False,
+                )
 
-                    down_block_res_samples, mid_block_res_sample = controlnet(
-                        noisy_latents,
-                        timesteps,
-                        encoder_hidden_states=encoder_hidden_states,
-                        controlnet_cond=controlnet_image,
-                        return_dict=False,
-                    )
+                # Predict the noise residual.
+                # This call will also trigger the forward hook on unet.mid_block to capture its output.
+                model_pred = unet(
+                    noisy_latents,
+                    timesteps,
+                    encoder_hidden_states=encoder_hidden_states,
+                    down_block_additional_residuals=[
+                        sample.to(dtype=weight_dtype) for sample in down_block_res_samples
+                    ],
+                    mid_block_additional_residual=mid_block_res_sample.to(dtype=weight_dtype),
+                ).sample
 
-                    model_pred = unet(
-                        noisy_latents,
-                        timesteps,
-                        encoder_hidden_states=encoder_hidden_states,
-                        down_block_additional_residuals=[
-                            sample.to(dtype=weight_dtype) for sample in down_block_res_samples
-                        ],
-                        mid_block_additional_residual=mid_block_res_sample.to(dtype=weight_dtype),
-                    ).sample
+                # Reconstruct conditioning image from the UNet's mid-block output
+                unet_mid_block_output = captured_features["mid_block_output"]
+                reconstructed_cond_image = reconstruction_decoder(unet_mid_block_output.to(dtype=weight_dtype))
 
-                    if noise_scheduler.config.prediction_type == "epsilon":
-                        target = noise
-                    elif noise_scheduler.config.prediction_type == "v_prediction":
-                        target = noise_scheduler.get_velocity(latents, noise, timesteps)
-                    else:
-                        raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
-                    
-                    noise_loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
-                    loss = noise_loss
-                    recon_loss = torch.tensor(0.0, device=accelerator.device)
-                    
-                    # We don't use the reconstruction decoder in stage 2, so we can set the images to None
-                    last_reconstructed_cond_image = None
-                    last_target_cond_image = None
+                # The conditioning image is RGB, but should be grayscale.
+                # We'll take one channel (e.g., R) since it's B&W.
+                target_cond_image = batch["conditioning_pixel_values"][:, 0:1, :, :].to(device=reconstructed_cond_image.device, dtype=reconstructed_cond_image.dtype)
 
+                last_reconstructed_cond_image = reconstructed_cond_image
+                last_target_cond_image = target_cond_image
+
+                
+                # Ignore black regions in loss, focusing on white regions.
+                mask = (target_cond_image > 0.5).float()
+                
+                # Reconstruction loss (L1 loss on white areas)
+                recon_loss = F.l1_loss(reconstructed_cond_image, target_cond_image, reduction="none")
+                recon_loss = (recon_loss * mask).sum() / (mask.sum() + 1e-8)
+
+                # Get the target for loss depending on the prediction type
+                if noise_scheduler.config.prediction_type == "epsilon":
+                    target = noise
+                elif noise_scheduler.config.prediction_type == "v_prediction":
+                    target = noise_scheduler.get_velocity(latents, noise, timesteps)
+                else:
+                    raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
+                
+                noise_loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
+                loss = noise_loss + args.reconstruction_loss_weight * recon_loss
 
                 accelerator.backward(loss)
                 if accelerator.sync_gradients:
-                    if args.training_stage == "stage1":
-                        params_to_clip = list(controlnet.parameters()) + list(reconstruction_decoder.parameters())
-                    else: # stage2
-                        params_to_clip = controlnet.parameters()
+                    params_to_clip = controlnet.parameters()
                     accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
                 optimizer.step()
                 lr_scheduler.step()
@@ -1526,28 +1397,17 @@ def main(args):
 
                 if accelerator.is_main_process:
                     if global_step % args.validation_steps == 0:
-                        if args.training_stage == "stage1":
-                            avg_val_recon_loss, gen_dset_log = log_validation_stage1(
-                                controlnet,
-                                reconstruction_decoder,
-                                tokenizer,
-                                args,
-                                accelerator,
-                                weight_dtype,
-                                global_step,
-                            )
-                        else: # stage2
-                            image_logs, gen_dset_log = log_validation(
-                                vae,
-                                text_encoder,
-                                tokenizer,
-                                unet,
-                                controlnet,
-                                args,
-                                accelerator,
-                                weight_dtype,
-                                global_step,
-                            )
+                        image_logs, gen_dset_log = log_validation(
+                            vae,
+                            text_encoder,
+                            tokenizer,
+                            unet,
+                            controlnet,
+                            args,
+                            accelerator,
+                            weight_dtype,
+                            global_step,
+                        )
                         
                     if global_step % args.checkpointing_steps == 0:
                         last_model_save_path = Path(args.output_dir) / "checkpoints" / "last_checkpoint" / f"checkpoint-{global_step}"
@@ -1589,67 +1449,39 @@ def main(args):
                                 save_path = Path(args.output_dir) / args.recon_decoder_log_dir_name / f"step_{global_step}.png"
                                 grid.save(str(save_path))
 
-                        # Save the last checkpoint
-                        cp_res = checkpoint_save_list["last"]["checkpoints_q"].enqueue(last_model_save_path)
-                        if cp_res is not None:
-                            shutil.rmtree(str(cp_res))
+                        for label_key in checkpoint_save_list.keys():
+                            if label_key == "last":
+                                cp_res = checkpoint_save_list[label_key]["checkpoints_q"].enqueue(last_model_save_path)
+                                if cp_res is not None:
+                                    shutil.rmtree(str(cp_res))
+                                continue
 
-                        # Save best checkpoint for stage1
-                        if args.training_stage == "stage1":
-                            if avg_val_recon_loss is not None:
-                                label_key = "recon_loss"
-                                metric_mean = avg_val_recon_loss
-                                metric_good_symbol = "v"  # Lower is better
+                            if label_key in args.fr_metrics:
+                                metric_mean = np.nanmean([log["metrics"][label_key][args.fr_metrics_save_model] for log in image_logs])
+                                metric_good_symbol = util.ImageSimilarityCalculator.metrics_annotation(label_key)["symbol"]
+                            elif label_key in args.db_metrics:
+                                metric_mean = gen_dset_log["metrics"][label_key]
+                                metric_good_symbol = util.DatasetSimilarityCalculator.metrics_annotation(label_key)["symbol"]
+                            else:
+                                raise ValueError(f"Unknown label_key {label_key}")
+                            
+                            model_save_path = Path(args.output_dir) / "checkpoints" / f"best_{label_key}_checkpoint" / f"checkpoint-{global_step}_value-{str(metric_mean)[:10]}"
 
-                                model_save_path = Path(args.output_dir) / "checkpoints" / f"best_{label_key}_checkpoint" / f"checkpoint-{global_step}_value-{str(metric_mean)[:10]}"
+                            if len(checkpoint_save_list[label_key]["values_q"]) > 0:
+                                if (metric_good_symbol == "^") and (checkpoint_save_list[label_key]["values_q"].max < metric_mean):
+                                    pass
+                                elif (metric_good_symbol == "v") and (checkpoint_save_list[label_key]["values_q"].min > metric_mean):
+                                    pass
+                                else:
+                                    continue
+                            
+                            shutil.copytree(str(last_model_save_path), str(model_save_path))
 
-                                should_save = True
-                                if len(checkpoint_save_list[label_key]["values_q"]) > 0:
-                                    if (metric_good_symbol == "v") and (checkpoint_save_list[label_key]["values_q"].min <= metric_mean):
-                                        should_save = False
-                                
-                                if should_save:
-                                    shutil.copytree(str(last_model_save_path), str(model_save_path))
-                                    cp_res = checkpoint_save_list[label_key]["checkpoints_q"].enqueue(model_save_path)
-                                    val_res = checkpoint_save_list[label_key]["values_q"].enqueue(metric_mean)
-                                    if cp_res is not None:
-                                        shutil.rmtree(str(cp_res))
-                                
-                                avg_val_recon_loss = None
+                            cp_res = checkpoint_save_list[label_key]["checkpoints_q"].enqueue(model_save_path)
+                            val_res = checkpoint_save_list[label_key]["values_q"].enqueue(metric_mean)
 
-                        # Save best checkpoints based on metrics only in stage2
-                        elif args.training_stage == "stage2":
-                            if image_logs is not None:
-                                for label_key in checkpoint_save_list.keys():
-                                    if label_key == "last":
-                                        continue
-
-                                    if label_key in args.fr_metrics:
-                                        metric_mean = np.nanmean([log["metrics"][label_key][args.fr_metrics_save_model] for log in image_logs])
-                                        metric_good_symbol = util.ImageSimilarityCalculator.metrics_annotation(label_key)["symbol"]
-                                    elif label_key in args.db_metrics:
-                                        metric_mean = gen_dset_log["metrics"][label_key]
-                                        metric_good_symbol = util.DatasetSimilarityCalculator.metrics_annotation(label_key)["symbol"]
-                                    else:
-                                        raise ValueError(f"Unknown label_key {label_key}")
-                                    
-                                    model_save_path = Path(args.output_dir) / "checkpoints" / f"best_{label_key}_checkpoint" / f"checkpoint-{global_step}_value-{str(metric_mean)[:10]}"
-
-                                    if len(checkpoint_save_list[label_key]["values_q"]) > 0:
-                                        if (metric_good_symbol == "^") and (checkpoint_save_list[label_key]["values_q"].max < metric_mean):
-                                            pass
-                                        elif (metric_good_symbol == "v") and (checkpoint_save_list[label_key]["values_q"].min > metric_mean):
-                                            pass
-                                        else:
-                                            continue
-                                    
-                                    shutil.copytree(str(last_model_save_path), str(model_save_path))
-
-                                    cp_res = checkpoint_save_list[label_key]["checkpoints_q"].enqueue(model_save_path)
-                                    val_res = checkpoint_save_list[label_key]["values_q"].enqueue(metric_mean)
-
-                                    if cp_res is not None:
-                                        shutil.rmtree(str(cp_res))
+                            if cp_res is not None:
+                                shutil.rmtree(str(cp_res))
                                 
             logs = {
                 "global_step": global_step,
@@ -1661,54 +1493,54 @@ def main(args):
             progress_bar.set_postfix(**logs)
 
             if (accelerator.sync_gradients) and (image_logs is not None) and (gen_dset_log is not None) and (global_step % args.validation_steps == 0):
-                if args.training_stage == "stage2":
-                    metrics_logs = {}
+                metrics_logs = {}
+                
+                for metric_key in args.fr_metrics:
+                    temp = {f"{metric_key}/{k}_{calc_type}": {f'gen-{j}':v for j, v in enumerate([log["metrics"][metric_key][calc_type] for log in image_logs])} for k, calc_type in enumerate(args.fr_metrics_calc_types)}
+                    metrics_logs = metrics_logs|temp
                     
-                    for metric_key in args.fr_metrics:
-                        temp = {f"{metric_key}/{k}_{calc_type}": {f'gen-{j}':v for j, v in enumerate([log["metrics"][metric_key][calc_type] for log in image_logs])} for k, calc_type in enumerate(args.fr_metrics_calc_types)}
-                        metrics_logs = metrics_logs|temp
-                        
-                    # Distoribution-Based Metrics
-                    if "metrics" in gen_dset_log.keys():
-                        # Combine all logs
-                        logs = logs | gen_dset_log["metrics"] | metrics_logs
+                # Distoribution-Based Metrics
+                if "metrics" in gen_dset_log.keys():
+                    # Combine all logs
+                    logs = logs | gen_dset_log["metrics"] | metrics_logs
 
             accelerator.log(logs, step=global_step)
 
 
             if (accelerator.sync_gradients) and (image_logs is not None) and (global_step % args.validation_steps == 0):
-                if args.training_stage == "stage2":
-                    # all-generate-images save
-                    save_dir = Path(args.output_dir)/"image_logs_all"/f"s-{global_step}"
-                    if not save_dir.exists():
-                        save_dir.mkdir(parents=True)
-                    for i, log in enumerate(image_logs):
-                        target_img = log["validation_target_image"]
-                        source_img = log["validation_source_image"]
-                        generate_images = log["validation_generate_images"]
-                        images = [target_img, source_img] + generate_images
-                        img_save_path = save_dir/f"s-{global_step}_images-{i}.png"
-                        image_grid(images, 1, len(images)).save(str(img_save_path))
-                    
-                    # Full-Reference Metrics
-                    validation_target_images = [log["validation_target_image"] for log in image_logs[:10]]
-                    validation_source_images = [log["validation_source_image"] for log in image_logs[:10]]
-                    generate_images = [g_img for log in image_logs[:10] for g_img in log["validation_generate_images"]]
-                    images = validation_target_images + validation_source_images + generate_images
-                    img_save_path = Path(args.output_dir)/Path(args.image_log_dir_name)/f"s-{global_step}_images_{0}.png"
-                    save_img = image_grid(images, (len(images)//len(validation_target_images)), len(validation_target_images))
-                    save_img.resize((round(save_img.width * 0.25), round(save_img.height * 0.25))).save(str(img_save_path))
+                
+                # all-generate-images save
+                save_dir = Path(args.output_dir)/"image_logs_all"/f"s-{global_step}"
+                if not save_dir.exists():
+                    save_dir.mkdir(parents=True)
+                for i, log in enumerate(image_logs):
+                    target_img = log["validation_target_image"]
+                    source_img = log["validation_source_image"]
+                    generate_images = log["validation_generate_images"]
+                    images = [target_img, source_img] + generate_images
+                    img_save_path = save_dir/f"s-{global_step}_images-{i}.png"
+                    image_grid(images, 1, len(images)).save(str(img_save_path))
+                
+                # Full-Reference Metrics
+                validation_target_images = [log["validation_target_image"] for log in image_logs[:10]]
+                validation_source_images = [log["validation_source_image"] for log in image_logs[:10]]
+                generate_images = [g_img for log in image_logs[:10] for g_img in log["validation_generate_images"]]
+                images = validation_target_images + validation_source_images + generate_images
+                img_save_path = Path(args.output_dir)/Path(args.image_log_dir_name)/f"s-{global_step}_images_{0}.png"
+                save_img = image_grid(images, (len(images)//len(validation_target_images)), len(validation_target_images))
+                save_img.resize((round(save_img.width * 0.25), round(save_img.height * 0.25))).save(str(img_save_path))
 
-                    # Distribution-Based Metrics
-                    if "metrics" in gen_dset_log.keys():
-                        for graph_type in args.plot_graph_types:
-                            graph_output_path = Path(args.output_dir)/Path(args.plot_graph_dir_name)/graph_type/f"s-{global_step}_{graph_type}.png"
-                            cv2.imwrite(str(graph_output_path), gen_dset_log[graph_type])
+                # Distribution-Based Metrics
+                if "metrics" in gen_dset_log.keys():
+                    for graph_type in args.plot_graph_types:
+                        graph_output_path = Path(args.output_dir)/Path(args.plot_graph_dir_name)/graph_type/f"s-{global_step}_{graph_type}.png"
+                        cv2.imwrite(str(graph_output_path), gen_dset_log[graph_type])
 
             if global_step >= args.max_train_steps:
                 break
 
     # Create the pipeline using using the trained modules and save it.
+    hook_handle.remove()
     accelerator.wait_for_everyone()
     if accelerator.is_main_process:
         controlnet = accelerator.unwrap_model(controlnet)
