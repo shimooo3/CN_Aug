@@ -780,7 +780,7 @@ def parse_args(input_args=None):
     parser.add_argument(
         "--reconstruction_loss_weight",
         type=float,
-        default=1.0,
+        default=0.5,
         help="Weight for the reconstruction loss.",
     )
 
@@ -1357,8 +1357,22 @@ def main(args):
                 reconstructed_cond_image = reconstruction_decoder(unet_mid_block_output.to(dtype=weight_dtype))
 
                 # The conditioning image is RGB, but should be grayscale.
-                # We'll take one channel (e.g., R) since it's B&W.
-                target_cond_image = batch["conditioning_pixel_values"][:, 0:1, :, :].to(device=reconstructed_cond_image.device, dtype=reconstructed_cond_image.dtype)
+                # Convert to grayscale properly, not just by taking the R channel.
+                target_cond_image = transforms.functional.rgb_to_grayscale(batch["conditioning_pixel_values"]).to(
+                    device=reconstructed_cond_image.device, dtype=reconstructed_cond_image.dtype
+                )
+
+                # Heuristically detect and fix inverted conditioning images (e.g., black-on-white).
+                # If an image is mostly bright, it's likely inverted. Invert it to be white-on-black,
+                # which the subsequent masking and loss calculation expects.
+                # This is done per-image in the batch.
+                with torch.no_grad():
+                    # Calculate mean brightness for each image in the batch
+                    img_mean = torch.mean(target_cond_image, dim=(-1, -2), keepdim=True)
+                    # Create a mask for images that are likely inverted (mean > 0.5)
+                    inversion_mask = (img_mean > 0.5).float()
+                    # Invert only the images identified by the mask
+                    target_cond_image = (target_cond_image * (1 - inversion_mask)) + ((1.0 - target_cond_image) * inversion_mask)
 
                 last_reconstructed_cond_image = reconstructed_cond_image
                 last_target_cond_image = target_cond_image
