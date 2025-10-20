@@ -77,29 +77,20 @@ logger = get_logger(__name__)
 class ReconstructionDecoder(torch.nn.Module):
     def __init__(self, in_channels, out_channels=1):
         super().__init__()
-        # Input is (N, in_channels, H/64, W/64) for resolution 512
+        # Input is (N, in_channels, H/8, W/8) for resolution 512
         # Output should be (N, out_channels, H, W)
         
         self.layers = torch.nn.Sequential(
-            torch.nn.Conv2d(in_channels, in_channels, kernel_size=3, padding=1),
-            torch.nn.ReLU(),
-            torch.nn.Upsample(scale_factor=2, mode='nearest'), # H/32
-            torch.nn.Conv2d(in_channels, 512, kernel_size=3, padding=1),
-            torch.nn.ReLU(),
-            torch.nn.Upsample(scale_factor=2, mode='nearest'), # H/16
-            torch.nn.Conv2d(512, 256, kernel_size=3, padding=1),
-            torch.nn.ReLU(),
-            torch.nn.Upsample(scale_factor=2, mode='nearest'), # H/8
-            torch.nn.Conv2d(256, 128, kernel_size=3, padding=1),
+            torch.nn.Conv2d(in_channels, 256, kernel_size=3, padding=1),
             torch.nn.ReLU(),
             torch.nn.Upsample(scale_factor=2, mode='nearest'), # H/4
-            torch.nn.Conv2d(128, 64, kernel_size=3, padding=1),
+            torch.nn.Conv2d(256, 128, kernel_size=3, padding=1),
             torch.nn.ReLU(),
             torch.nn.Upsample(scale_factor=2, mode='nearest'), # H/2
-            torch.nn.Conv2d(64, 32, kernel_size=3, padding=1),
+            torch.nn.Conv2d(128, 64, kernel_size=3, padding=1),
             torch.nn.ReLU(),
             torch.nn.Upsample(scale_factor=2, mode='nearest'), # H
-            torch.nn.Conv2d(32, out_channels, kernel_size=3, padding=1),
+            torch.nn.Conv2d(64, out_channels, kernel_size=3, padding=1),
             torch.nn.Sigmoid()
         )
 
@@ -1154,8 +1145,8 @@ def main(args):
         optimizer_class = torch.optim.AdamW
 
     # 20240101 added
-    # The mid_block of UNet2DConditionModel has out_channels=1280 for SD v1/v2.
-    reconstruction_decoder = ReconstructionDecoder(in_channels=1280)
+    # The decoder of UNet2DConditionModel has out_channels=block_out_channels[-1] for SD v1/v2.
+    reconstruction_decoder = ReconstructionDecoder(in_channels=unet.config.block_out_channels[-1])
 
     # Optimizer creation
     params_to_optimize = list(controlnet.parameters()) + list(reconstruction_decoder.parameters())
@@ -1211,19 +1202,18 @@ def main(args):
     unet.to(accelerator.device, dtype=weight_dtype)
     text_encoder.to(accelerator.device, dtype=weight_dtype)
 
-    # Hook to capture the output of the UNet's mid_block. This will be used as input to the reconstruction decoder.
+    # Hook to capture the output of the UNet's decoder. This will be used as input to the reconstruction decoder.
     captured_features = {}
 
-    def get_unet_mid_block_hook(name):
+    def get_unet_decoder_output_hook(name):
         def hook(model, input, output):
             if isinstance(output, tuple):
                 captured_features[name] = output[0]
             else:
                 captured_features[name] = output
-
         return hook
 
-    hook_handle = unet.mid_block.register_forward_hook(get_unet_mid_block_hook("mid_block_output"))
+    hook_handle = unet.up_blocks[-1].register_forward_hook(get_unet_decoder_output_hook("decoder_output"))
 
     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
     num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
@@ -1352,9 +1342,9 @@ def main(args):
                     mid_block_additional_residual=mid_block_res_sample.to(dtype=weight_dtype),
                 ).sample
 
-                # Reconstruct conditioning image from the UNet's mid-block output
-                unet_mid_block_output = captured_features["mid_block_output"]
-                reconstructed_cond_image = reconstruction_decoder(unet_mid_block_output.to(dtype=weight_dtype))
+                # Reconstruct conditioning image from the UNet's decoder output
+                unet_decoder_output = captured_features["decoder_output"]
+                reconstructed_cond_image = reconstruction_decoder(unet_decoder_output.to(dtype=weight_dtype))
 
                 # The conditioning image is RGB, but should be grayscale.
                 # Convert to grayscale properly, not just by taking the R channel.
