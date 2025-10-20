@@ -1145,8 +1145,8 @@ def main(args):
         optimizer_class = torch.optim.AdamW
 
     # 20240101 added
-    # The decoder of UNet2DConditionModel has out_channels=block_out_channels[-1] for SD v1/v2.
-    reconstruction_decoder = ReconstructionDecoder(in_channels=unet.config.block_out_channels[-1])
+    # The hooked output from the UNet decoder has `block_out_channels[0]` channels.
+    reconstruction_decoder = ReconstructionDecoder(in_channels=unet.config.block_out_channels[0])
 
     # Optimizer creation
     params_to_optimize = list(controlnet.parameters()) + list(reconstruction_decoder.parameters())
