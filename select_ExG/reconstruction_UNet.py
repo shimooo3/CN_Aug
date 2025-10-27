@@ -186,6 +186,10 @@ def train(args):
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     validation_dir.mkdir(parents=True, exist_ok=True)
 
+    # Checkpoint tracking
+    best_loss = float('inf')
+    saved_checkpoints = []
+
     # Training loop
     for epoch in range(args.epochs):
         model.train()
@@ -214,16 +218,27 @@ def train(args):
         avg_loss = total_loss / len(dataloader)
         print(f"Epoch [{epoch+1}/{args.epochs}], Average Loss: {avg_loss:.4f}")
 
-        # Save validation images
+        # Save validation images (behavior is unchanged)
         if (epoch + 1) % args.validation_interval == 0:
             save_validation_images(model, val_dataloader, device, validation_dir, epoch + 1)
             print(f"Saved validation images for epoch {epoch+1}")
 
-        # Save checkpoint
-        if (epoch + 1) % args.checkpoint_interval == 0:
-            checkpoint_path = checkpoint_dir / f"model_epoch_{epoch+1}.pth"
+        # Save checkpoint only if loss improves, and keep only the best 3
+        if avg_loss < best_loss:
+            best_loss = avg_loss
+            checkpoint_path = checkpoint_dir / f"model_epoch_{epoch+1}_loss_{avg_loss:.4f}.pth"
             torch.save(model.state_dict(), checkpoint_path)
-            print(f"Saved checkpoint to {checkpoint_path}")
+            print(f"Loss improved. Saved checkpoint to {checkpoint_path}")
+            
+            saved_checkpoints.append(checkpoint_path)
+            
+            if len(saved_checkpoints) > 3:
+                checkpoint_to_remove = saved_checkpoints.pop(0)
+                try:
+                    os.remove(checkpoint_to_remove)
+                    print(f"Removed old checkpoint: {checkpoint_to_remove}")
+                except OSError as e:
+                    print(f"Error removing old checkpoint {checkpoint_to_remove}: {e}")
 
     # Save final model
     final_model_path = output_dir / "final_model.pth"
@@ -243,7 +258,6 @@ def main():
     parser.add_argument("--image_size", type=int, default=512, help="Size to resize images to.")
     parser.add_argument("--unfreeze_decoder", action="store_true", help="If set, the decoder weights will be fine-tuned.")
     parser.add_argument("--validation_interval", type=int, default=5, help="Run validation every N epochs.")
-    parser.add_argument("--checkpoint_interval", type=int, default=10, help="Save checkpoint every N epochs.")
 
     args = parser.parse_args()
     train(args)
