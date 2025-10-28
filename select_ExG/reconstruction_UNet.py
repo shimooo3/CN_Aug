@@ -189,6 +189,7 @@ def train(args):
     # Checkpoint tracking
     best_loss = float('inf')
     saved_checkpoints = []
+    saved_decoder_checkpoints = []
 
     # Training loop
     for epoch in range(args.epochs):
@@ -240,6 +241,21 @@ def train(args):
                 except OSError as e:
                     print(f"Error removing old checkpoint {checkpoint_to_remove}: {e}")
 
+            if args.unfreeze_decoder:
+                decoder_checkpoint_path = checkpoint_dir / f"decoder_epoch_{epoch+1}_loss_{avg_loss:.4f}.pth"
+                torch.save(model.decoder.state_dict(), decoder_checkpoint_path)
+                print(f"Saved decoder checkpoint to {decoder_checkpoint_path}")
+                
+                saved_decoder_checkpoints.append(decoder_checkpoint_path)
+                
+                if len(saved_decoder_checkpoints) > 3:
+                    decoder_checkpoint_to_remove = saved_decoder_checkpoints.pop(0)
+                    try:
+                        os.remove(decoder_checkpoint_to_remove)
+                        print(f"Removed old decoder checkpoint: {decoder_checkpoint_to_remove}")
+                    except OSError as e:
+                        print(f"Error removing old decoder checkpoint {decoder_checkpoint_to_remove}: {e}")
+
     # Save final model
     final_model_path = output_dir / "final_model.pth"
     torch.save(model.state_dict(), final_model_path)
@@ -257,7 +273,7 @@ def main():
     parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate.")
     parser.add_argument("--image_size", type=int, default=512, help="Size to resize images to.")
     parser.add_argument("--unfreeze_decoder", action="store_true", help="If set, the decoder weights will be fine-tuned.")
-    parser.add_argument("--validation_interval", type=int, default=5, help="Run validation every N epochs.")
+    parser.add_argument("--validation_interval", type=int, default=50, help="Run validation every N epochs.")
 
     args = parser.parse_args()
     train(args)
