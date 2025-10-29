@@ -34,3 +34,6 @@ nn.BCEWithLogits Lossの出力は生の値(logits)であるため，場合によ
 
 ## 減らないnoise_loss
 最大値は下がるようになった，品質全体の底上げ
+
+## フォルダ内のファイル数を数える
+$ ls -l |wc -l
