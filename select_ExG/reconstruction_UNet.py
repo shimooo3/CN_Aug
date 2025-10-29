@@ -109,11 +109,18 @@ class ImagePairDataset(Dataset):
             
         return real_image, comp_image
 
-def masked_mse_loss(pred, target):
-    """白い領域のみでペナルティを与える損失関数"""
-    mask = (target > 0.5).float()
-    loss = F.mse_loss(pred, target, reduction="none")
-    loss = (loss * mask).sum() / (mask.sum() + 1e-8)
+def masked_mse_loss(pred, target, white_only=True):
+    """
+    損失関数を計算する。
+    white_only=Trueの場合、ターゲット画像の白い領域のみで損失を計算する。
+    それ以外の場合は、画像全体で損失を計算する。
+    """
+    if white_only:
+        mask = (target > 0.5).float()
+        loss = F.mse_loss(pred, target, reduction="none")
+        loss = (loss * mask).sum() / (mask.sum() + 1e-8)
+    else:
+        loss = F.mse_loss(pred, target)
     return loss
 
 def save_validation_images(model, dataloader, device, save_dir, epoch):
@@ -207,7 +214,7 @@ def train(args):
             outputs = model(real_images)
             
             # Loss calculation
-            loss = masked_mse_loss(outputs, comp_images)
+            loss = masked_mse_loss(outputs, comp_images, white_only=not args.all_region_loss)
             
             # Backward pass and optimization
             loss.backward()
@@ -274,6 +281,7 @@ def main():
     parser.add_argument("--image_size", type=int, default=512, help="Size to resize images to.")
     parser.add_argument("--unfreeze_decoder", action="store_true", help="If set, the decoder weights will be fine-tuned.")
     parser.add_argument("--validation_interval", type=int, default=50, help="Run validation every N epochs.")
+    parser.add_argument("--all_region_loss", action="store_true", help="If set, loss is calculated on all regions, not just white ones.")
 
     args = parser.parse_args()
     train(args)
