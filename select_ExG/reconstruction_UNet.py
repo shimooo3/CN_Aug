@@ -201,6 +201,13 @@ def train(args):
     # Training loop
     for epoch in range(args.epochs):
         model.train()
+        
+        use_white_only_loss = True
+        if args.use_all_region_from_epoch != -1 and epoch >= args.use_all_region_from_epoch:
+            use_white_only_loss = False
+            if epoch == args.use_all_region_from_epoch:
+                print(f"Epoch {epoch+1}: Switched to using all regions for loss calculation.")
+
         progress_bar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{args.epochs}")
         total_loss = 0
 
@@ -214,7 +221,7 @@ def train(args):
             outputs = model(real_images)
             
             # Loss calculation
-            loss = masked_mse_loss(outputs, comp_images, white_only=not args.all_region_loss)
+            loss = masked_mse_loss(outputs, comp_images, white_only=use_white_only_loss)
             
             # Backward pass and optimization
             loss.backward()
@@ -281,7 +288,7 @@ def main():
     parser.add_argument("--image_size", type=int, default=512, help="Size to resize images to.")
     parser.add_argument("--unfreeze_decoder", action="store_true", help="If set, the decoder weights will be fine-tuned.")
     parser.add_argument("--validation_interval", type=int, default=50, help="Run validation every N epochs.")
-    parser.add_argument("--all_region_loss", action="store_true", help="If set, loss is calculated on all regions, not just white ones.")
+    parser.add_argument("--use_all_region_from_epoch", type=int, default=-1, help="Epoch from which to start using all regions for loss calculation. Default: -1 (only white regions).")
 
     args = parser.parse_args()
     train(args)
