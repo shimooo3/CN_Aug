@@ -175,16 +175,12 @@ def train(args):
     # Model
     model = CompositionUNet(
         pretrained_decoder_path=args.decoder_weights_path,
-        freeze_decoder=not args.unfreeze_decoder
+        freeze_decoder=True # Always start with decoder frozen
     ).to(device)
 
     # Optimizer
-    if not args.unfreeze_decoder:
-        print("Training only the encoder.")
-        optimizer = torch.optim.Adam(model.encoder.parameters(), lr=args.lr)
-    else:
-        print("Training both encoder and decoder.")
-        optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    print("Initially training only the encoder.")
+    optimizer = torch.optim.Adam(model.encoder.parameters(), lr=args.lr)
 
     # Output directories
     output_dir = Path(args.output_dir)
@@ -199,7 +195,18 @@ def train(args):
     saved_decoder_checkpoints = []
 
     # Training loop
+    decoder_unfrozen = False
     for epoch in range(args.epochs):
+        # Unfreeze decoder if the epoch is reached
+        if not decoder_unfrozen and args.unfreeze_decoder_from_epoch != -1 and epoch >= args.unfreeze_decoder_from_epoch:
+            print(f"Epoch {epoch+1}: Unfreezing decoder weights for fine-tuning.")
+            for param in model.decoder.parameters():
+                param.requires_grad = True
+            
+            print("Creating new optimizer for the whole model.")
+            optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+            decoder_unfrozen = True
+
         model.train()
         
         use_white_only_loss = True
@@ -255,7 +262,7 @@ def train(args):
                 except OSError as e:
                     print(f"Error removing old checkpoint {checkpoint_to_remove}: {e}")
 
-            if args.unfreeze_decoder:
+            if decoder_unfrozen:
                 decoder_checkpoint_path = checkpoint_dir / f"decoder_epoch_{epoch+1}_loss_{avg_loss:.4f}.pth"
                 torch.save(model.decoder.state_dict(), decoder_checkpoint_path)
                 print(f"Saved decoder checkpoint to {decoder_checkpoint_path}")
@@ -286,7 +293,7 @@ def main():
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training.")
     parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate.")
     parser.add_argument("--image_size", type=int, default=512, help="Size to resize images to.")
-    parser.add_argument("--unfreeze_decoder", action="store_true", help="If set, the decoder weights will be fine-tuned.")
+    parser.add_argument("--unfreeze_decoder_from_epoch", type=int, default=-1, help="Epoch to start unfreezing and training the decoder. Default: -1 (decoder remains frozen).")
     parser.add_argument("--validation_interval", type=int, default=50, help="Run validation every N epochs.")
     parser.add_argument("--use_all_region_from_epoch", type=int, default=-1, help="Epoch from which to start using all regions for loss calculation. Default: -1 (only white regions).")
 
