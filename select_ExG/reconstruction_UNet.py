@@ -112,13 +112,30 @@ class ImagePairDataset(Dataset):
 def masked_mse_loss(pred, target, white_only=True):
     """
     損失関数を計算する。
-    white_only=Trueの場合、ターゲット画像の白い領域のみで損失を計算する。
+    white_only=Trueの場合、ターゲット画像の白い領域と、その8近傍の黒い領域のみで損失を計算する。
+    これにより、輪郭部分の学習を促進し、予測が真っ黒になるのを防ぐ。
     それ以外の場合は、画像全体で損失を計算する。
     """
     if white_only:
-        mask = (target > 0.5).float()
+        # 白い領域のマスク (ピクセル値 > 0.5)
+        white_mask = (target > 0.5).float()
+        
+        # 白い領域の8近傍を計算 (最大プーリングで膨張させる)
+        # カーネルサイズ3x3で最大値を取ることで、白い領域が1ピクセル広がる
+        dilated_white_mask = F.max_pool2d(white_mask, kernel_size=3, stride=1, padding=1)
+        
+        # 膨張した領域から元の白い領域を引くことで、境界領域のみのマスクを得る
+        boundary_mask = dilated_white_mask - white_mask
+        
+        # 境界領域のうち、実際に黒い部分のみを抽出する
+        black_boundary_mask = boundary_mask * (target <= 0.5).float()
+        
+        # 最終的なマスクは「白い領域」+「境界の黒い領域」
+        final_mask = white_mask + black_boundary_mask
+        
+        # マスクを適用して損失を計算
         loss = F.mse_loss(pred, target, reduction="none")
-        loss = (loss * mask).sum() / (mask.sum() + 1e-8)
+        loss = (loss * final_mask).sum() / (final_mask.sum() + 1e-8)
     else:
         loss = F.mse_loss(pred, target)
     return loss
