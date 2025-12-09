@@ -774,6 +774,11 @@ def parse_args(input_args=None):
         default=0.5,
         help="Weight for the reconstruction loss.",
     )
+    parser.add_argument(
+        "--loss_black_area",
+        action="store_true",
+        help="Whether to include the black area around the white area in the loss calculation.",
+    )
 
     if input_args is not None:
         args = parser.parse_args(input_args)
@@ -1369,7 +1374,14 @@ def main(args):
 
                 
                 # Ignore black regions in loss, focusing on white regions.
-                mask = (target_cond_image > 0.5).float()
+                if args.loss_black_area:
+                    white_mask = (target_cond_image > 0.5).float()
+                    dilated_white_mask = F.max_pool2d(white_mask, kernel_size=3, stride=1, padding=1)
+                    boundary_mask = dilated_white_mask - white_mask
+                    black_boundary_mask = boundary_mask * (target_cond_image <= 0.5).float()
+                    mask = white_mask + black_boundary_mask
+                else:
+                    mask = (target_cond_image > 0.5).float()
                 
                 # Reconstruction loss (MSE loss on white areas)
                 recon_loss = F.mse_loss(reconstructed_cond_image, target_cond_image, reduction="none")
